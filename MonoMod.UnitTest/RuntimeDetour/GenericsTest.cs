@@ -34,7 +34,7 @@ namespace MonoMod.UnitTest {
 
             handle = DetourHelper.Generic.AddPatch(
                 typeof(GenericSrc<>).GetMethod(nameof(GenericSrc<int>.FromTCtx), BindingFlags.Public | BindingFlags.Instance),
-                typeof(GenericsTest).GetMethod(nameof(To), BindingFlags.NonPublic | BindingFlags.Static));
+                typeof(GenericsTest).GetMethod(nameof(ToWithThis), BindingFlags.NonPublic | BindingFlags.Static));
 
             try {
                 WrapperT();
@@ -54,7 +54,18 @@ namespace MonoMod.UnitTest {
         }
 
         private static void To<T>(T value) {
-            Assert.True(true); // all is well
+            if (typeof(T) == typeof(string)) {
+                Assert.Equal("hello", (string)(object)value);
+            } else if (typeof(T) == typeof(int)) {
+                Assert.Equal(42, (int) (object) value);
+            }else {
+                Assert.True(false, $"To called with invalid type parameter {typeof(T)}");
+            }
+        }
+
+        private static void ToWithThis<T>(object thisObj, T value) {
+            Assert.IsType<GenericSrc<T>>(thisObj);
+            To(value);
         }
 
         private static void WrapperMT() {

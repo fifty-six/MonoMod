@@ -42,6 +42,16 @@ namespace MonoMod.UnitTest {
             } finally {
                 DetourHelper.Generic.RemovePatch(handle);
             }
+
+            handle = DetourHelper.Generic.AddPatch(
+                typeof(GenericSrc<>).GetMethod(nameof(GenericSrc<int>.FromMDCtx), BindingFlags.Public | BindingFlags.Instance),
+                typeof(GenericsTest).GetMethod(nameof(ToWithThis2), BindingFlags.NonPublic | BindingFlags.Static));
+
+            try {
+                WrapperT2();
+            } finally {
+                DetourHelper.Generic.RemovePatch(handle);
+            }
         }
 
         private static void WrapperMD() {
@@ -69,6 +79,11 @@ namespace MonoMod.UnitTest {
             Assert.IsType<GenericSrc<T>>(thisObj);
             To(value);
         }
+        private static void ToWithThis2<T, T2>(object thisObj, T value, T2 value2) {
+            Assert.IsType<GenericSrc<T>>(thisObj);
+            To(value2);
+            To(value);
+        }
 
         private static void WrapperMT() {
             GenericSrc<string>.FromMTCtx("hello");
@@ -80,11 +95,21 @@ namespace MonoMod.UnitTest {
             new GenericSrc<int>().FromTCtx(42);
         }
 
+        private static void WrapperT2() {
+            new GenericSrc<string>().FromMDCtx("hello", "hello");
+            new GenericSrc<int>().FromMDCtx(42, "hello");
+            new GenericSrc<string>().FromMDCtx("hello", 42);
+            new GenericSrc<int>().FromMDCtx(42, 42);
+        }
+
         private partial class GenericSrc<T> {
             public static void FromMTCtx(T value) {
                 Assert.True(false, "Original generic was called when it shouldn't have been!");
             }
             public void FromTCtx(T value) {
+                Assert.True(false, "Original generic was called when it shouldn't have been!");
+            }
+            public void FromMDCtx<T2>(T value, T2 value2) {
                 Assert.True(false, "Original generic was called when it shouldn't have been!");
             }
         }

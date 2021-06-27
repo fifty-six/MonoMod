@@ -13,7 +13,9 @@ namespace MonoMod.UnitTest {
         [Fact]
         public void TestGenerics() {
 
-            int handle = DetourHelper.Generic.AddPatch(
+            int handle;
+
+            handle = DetourHelper.Generic.AddPatch(
                 typeof(GenericsTest).GetMethod(nameof(FromMDCtx), BindingFlags.NonPublic | BindingFlags.Static),
                 typeof(GenericsTest).GetMethod(nameof(To), BindingFlags.NonPublic | BindingFlags.Static));
 

@@ -117,6 +117,120 @@ namespace MonoMod.UnitTest {
         }
         #endregion
 
+        #region Stack spilling basic generics
+        [Fact]
+        public void TestGenericsStackSpill() {
+
+            int handle;
+
+            handle = DetourHelper.Generic.AddPatch(
+                typeof(GenericsTest).GetMethod(nameof(FromSMDCtx), BindingFlags.NonPublic | BindingFlags.Static),
+                typeof(GenericsTest).GetMethod(nameof(ToS), BindingFlags.NonPublic | BindingFlags.Static));
+
+            try {
+                WrapperSMD();
+            } finally {
+                DetourHelper.Generic.RemovePatch(handle);
+            }
+
+            handle = DetourHelper.Generic.AddPatch(
+                typeof(GenericSrc<>).GetMethod(nameof(GenericSrc<int>.FromSMTCtx), BindingFlags.Public | BindingFlags.Static),
+                typeof(GenericsTest).GetMethod(nameof(ToS), BindingFlags.NonPublic | BindingFlags.Static));
+
+            try {
+                WrapperSMT();
+            } finally {
+                DetourHelper.Generic.RemovePatch(handle);
+            }
+
+            handle = DetourHelper.Generic.AddPatch(
+                typeof(GenericSrc<>).GetMethod(nameof(GenericSrc<int>.FromSTCtx), BindingFlags.Public | BindingFlags.Instance),
+                typeof(GenericsTest).GetMethod(nameof(ToWithThisS), BindingFlags.NonPublic | BindingFlags.Static));
+
+            try {
+                WrapperST();
+            } finally {
+                DetourHelper.Generic.RemovePatch(handle);
+            }
+
+            handle = DetourHelper.Generic.AddPatch(
+                typeof(GenericSrc<>).GetMethod(nameof(GenericSrc<int>.FromSMDCtx), BindingFlags.Public | BindingFlags.Instance),
+                typeof(GenericsTest).GetMethod(nameof(ToWithThis2S), BindingFlags.NonPublic | BindingFlags.Static));
+
+            try {
+                WrapperST2();
+            } finally {
+                DetourHelper.Generic.RemovePatch(handle);
+            }
+        }
+
+        private static void WrapperSMD() {
+            FromSMDCtx("hello", 1, 2, 3, 4, 5, 6);
+            FromSMDCtx(42, 1, 2, 3, 4, 5, 6);
+        }
+
+        // TODO: test all the other cases
+
+        private static void FromSMDCtx<T>(T value, int a, int b, int c, int d, int e, int f) {
+            Assert.True(false, "Original generic was called when it shouldn't have been!");
+        }
+
+        private static void ToS<T>(T value, int a, int b, int c, int d, int e, int f) {
+            if (typeof(T) == typeof(string)) {
+                Assert.Equal("hello", (string) (object) value);
+            } else if (typeof(T) == typeof(int)) {
+                Assert.Equal(42, (int) (object) value);
+            } else {
+                Assert.True(false, $"To called with invalid type parameter {typeof(T)}");
+            }
+            Assert.Equal(1, a);
+            Assert.Equal(2, b);
+            Assert.Equal(3, c);
+            Assert.Equal(4, d);
+            Assert.Equal(5, e);
+            Assert.Equal(6, f);
+        }
+
+        private static void ToWithThisS<T>(object thisObj, T value, int a, int b, int c, int d, int e, int f) {
+            Assert.IsType<GenericSrc<T>>(thisObj);
+            ToS(value, a, b, c, d, e, f);
+        }
+        private static void ToWithThis2S<T, T2>(object thisObj, T value, T2 value2, int a, int b, int c, int d, int e, int f) {
+            Assert.IsType<GenericSrc<T>>(thisObj);
+            ToS(value2, a, b, c, d, e, f);
+            ToS(value, a, b, c, d, e, f);
+        }
+
+        private static void WrapperSMT() {
+            GenericSrc<string>.FromSMTCtx("hello", 1, 2, 3, 4, 5, 6);
+            GenericSrc<int>.FromSMTCtx(42, 1, 2, 3, 4, 5, 6);
+        }
+
+        private static void WrapperST() {
+            new GenericSrc<string>().FromSTCtx("hello", 1, 2, 3, 4, 5, 6);
+            new GenericSrc<int>().FromSTCtx(42, 1, 2, 3, 4, 5, 6);
+        }
+
+        private static void WrapperST2() {
+            new GenericSrc<string>().FromSMDCtx("hello", "hello", 1, 2, 3, 4, 5, 6);
+            new GenericSrc<int>().FromSMDCtx(42, "hello", 1, 2, 3, 4, 5, 6);
+            new GenericSrc<string>().FromSMDCtx("hello", 42, 1, 2, 3, 4, 5, 6);
+            new GenericSrc<int>().FromSMDCtx(42, 42, 1, 2, 3, 4, 5, 6);
+        }
+
+        private partial class GenericSrc<T> {
+            public static void FromSMTCtx(T value, int a, int b, int c, int d, int e, int f) {
+                Assert.True(false, "Original generic was called when it shouldn't have been!");
+            }
+            public void FromSTCtx(T value, int a, int b, int c, int d, int e, int f) {
+                Assert.True(false, "Original generic was called when it shouldn't have been!");
+            }
+            public void FromSMDCtx<T2>(T value, T2 value2, int a, int b, int c, int d, int e, int f) {
+                Assert.True(false, "Original generic was called when it shouldn't have been!");
+            }
+        }
+        #endregion
+
         #region Return buffer generics
         [Fact]
         public void TestReturnBufferGenerics() {

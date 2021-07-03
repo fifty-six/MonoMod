@@ -122,7 +122,7 @@ namespace MonoMod.UnitTest {
         public void TestGenericsStackSpill() {
 
             int handle;
-
+            
             handle = DetourHelper.Generic.AddPatch(
                 typeof(GenericsTest).GetMethod(nameof(FromSMDCtx), BindingFlags.NonPublic | BindingFlags.Static),
                 typeof(GenericsTest).GetMethod(nameof(ToS), BindingFlags.NonPublic | BindingFlags.Static));
@@ -142,7 +142,7 @@ namespace MonoMod.UnitTest {
             } finally {
                 DetourHelper.Generic.RemovePatch(handle);
             }
-
+            
             handle = DetourHelper.Generic.AddPatch(
                 typeof(GenericSrc<>).GetMethod(nameof(GenericSrc<int>.FromSTCtx), BindingFlags.Public | BindingFlags.Instance),
                 typeof(GenericsTest).GetMethod(nameof(ToWithThisS), BindingFlags.NonPublic | BindingFlags.Static));

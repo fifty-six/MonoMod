@@ -14,6 +14,7 @@ using System.Text.RegularExpressions;
 using MonoMod.Utils;
 using ExceptionHandler = Mono.Cecil.Cil.ExceptionHandler;
 using MonoMod.Cil;
+using System.Globalization;
 
 #if CECIL0_9
 using InterfaceImplementation = Mono.Cecil.TypeReference;
@@ -164,15 +165,29 @@ namespace MonoMod {
             set => _writerParameters = value;
         }
 
+        public bool GACEnabled;
+
+        private string[] _GACPathsNone = new string[0];
         protected string[] _GACPaths;
         public string[] GACPaths {
             get {
+                // .NET Core doesn't have a GAC.
+                // .NET Framework does have a GAC but only on Windows.
+                // The GAC might still be relevant when patching a Framework assembly with Core.
+                if (!GACEnabled)
+                    return _GACPathsNone;
+
                 if (_GACPaths != null)
                     return _GACPaths;
 
+
                 if (!IsMono) {
                     // C:\Windows\Microsoft.NET\assembly\GAC_MSIL\System.Xml
-                    string path = Path.Combine(Environment.GetEnvironmentVariable("windir"), "Microsoft.NET");
+                    string path = Environment.GetEnvironmentVariable("windir");
+                    if (string.IsNullOrEmpty(path))
+                        return _GACPaths = _GACPathsNone;
+
+                    path = Path.Combine(path, "Microsoft.NET");
                     path = Path.Combine(path, "assembly");
                     _GACPaths = new string[] {
                         Path.Combine(path, "GAC_32"),
@@ -212,7 +227,10 @@ namespace MonoMod {
 
                 return _GACPaths;
             }
-            set => _GACPaths = value;
+            set {
+                GACEnabled = true;
+                _GACPaths = value;
+            }
         }
 
         public MonoModder() {
@@ -239,7 +257,7 @@ namespace MonoMod {
 
             string envDebugSymbolFormat = Environment.GetEnvironmentVariable("MONOMOD_DEBUG_FORMAT");
             if (envDebugSymbolFormat != null) {
-                envDebugSymbolFormat = envDebugSymbolFormat.ToLowerInvariant();
+                envDebugSymbolFormat = envDebugSymbolFormat.ToLower(CultureInfo.InvariantCulture);
                 if (envDebugSymbolFormat == "pdb")
                     DebugSymbolOutputFormat = DebugSymbolFormat.PDB;
                 else if (envDebugSymbolFormat == "mdb")
@@ -248,6 +266,13 @@ namespace MonoMod {
 
             string upgradeMSCORLIBStr = Environment.GetEnvironmentVariable("MONOMOD_MSCORLIB_UPGRADE");
             UpgradeMSCORLIB = string.IsNullOrEmpty(upgradeMSCORLIBStr) ? (bool?) null : (upgradeMSCORLIBStr != "0");
+
+            GACEnabled =
+#if NETFRAMEWORK
+                Environment.GetEnvironmentVariable("MONOMOD_GAC_ENABLED") != "0";
+#else
+                Environment.GetEnvironmentVariable("MONOMOD_GAC_ENABLED") == "1";
+#endif
 
             MonoModRulesManager.Register(this);
         }
@@ -400,7 +425,7 @@ namespace MonoMod {
             }
 
             // Used to fix Mono.Cecil.pdb being loaded instead of Mono.Cecil.Pdb.dll
-            string ext = Path.GetExtension(name).ToLowerInvariant();
+            string ext = Path.GetExtension(name).ToLower(CultureInfo.InvariantCulture);
             bool nameRisky = ext == "pdb" || ext == "mdb";
 
             string path = null;
@@ -438,13 +463,13 @@ namespace MonoMod {
                         int highestIndex = 0;
                         for (int i = 0; i < versions.Length; i++) {
                             string versionPath = versions[i];
-                            if (versionPath.StartsWith(path))
+                            if (versionPath.StartsWith(path, StringComparison.Ordinal))
                                 versionPath = versionPath.Substring(path.Length + 1);
                             Match versionMatch = Regex.Match(versionPath, "\\d+");
                             if (!versionMatch.Success) {
                                 continue;
                             }
-                            int version = int.Parse(versionMatch.Value);
+                            int version = int.Parse(versionMatch.Value, CultureInfo.InvariantCulture);
                             if (version > highest) {
                                 highest = version;
                                 highestIndex = i;
@@ -526,8 +551,11 @@ namespace MonoMod {
             rp.AssemblyResolver = _rp.AssemblyResolver;
             rp.MetadataResolver = _rp.MetadataResolver;
 #if !CECIL0_9
+            rp.InMemory = _rp.InMemory;
             rp.MetadataImporterProvider = _rp.MetadataImporterProvider;
             rp.ReflectionImporterProvider = _rp.ReflectionImporterProvider;
+            rp.ThrowIfSymbolsAreNotMatching = _rp.ThrowIfSymbolsAreNotMatching;
+            rp.ApplyWindowsRuntimeProjections = _rp.ApplyWindowsRuntimeProjections;
 #endif
             rp.SymbolStream = _rp.SymbolStream;
             rp.SymbolReaderProvider = _rp.SymbolReaderProvider;
@@ -544,15 +572,15 @@ namespace MonoMod {
             if (Directory.Exists(path)) {
                 Log($"[ReadMod] Loading mod dir: {path}");
                 string mainName = Module.Name.Substring(0, Module.Name.Length - 3);
-                string mainNameSpaceless = mainName.Replace(" ", "");
+                string mainNameSpaceless = mainName.Replace(" ", "", StringComparison.Ordinal);
                 if (!DependencyDirs.Contains(path)) {
                     (AssemblyResolver as BaseAssemblyResolver)?.AddSearchDirectory(path);
                     DependencyDirs.Add(path);
                 }
                 foreach (string modFile in Directory.GetFiles(path))
-                    if ((Path.GetFileName(modFile).StartsWith(mainName) ||
-                        Path.GetFileName(modFile).StartsWith(mainNameSpaceless)) &&
-                        modFile.ToLower().EndsWith(".mm.dll"))
+                    if ((Path.GetFileName(modFile).StartsWith(mainName, StringComparison.Ordinal) ||
+                        Path.GetFileName(modFile).StartsWith(mainNameSpaceless, StringComparison.Ordinal)) &&
+                        modFile.ToLower(CultureInfo.InvariantCulture).EndsWith(".mm.dll", StringComparison.Ordinal))
                         ReadMod(modFile);
                 return;
             }
@@ -927,13 +955,13 @@ namespace MonoMod {
             TypeReference type;
             if ((type = main.GetType(fullName, false)) != null)
                 return type;
-            if (fullName.StartsWith("<PrivateImplementationDetails>/"))
+            if (fullName.StartsWith("<PrivateImplementationDetails>/", StringComparison.Ordinal))
                 return null;
             if (crawled.Contains(main))
                 return null;
             crawled.Push(main);
             foreach (ModuleDefinition dep in DependencyMap[main])
-                if (!(RemovePatchReferences && dep.Assembly.Name.Name.EndsWith(".mm")) && (type = FindType(dep, fullName, crawled)) != null)
+                if (!(RemovePatchReferences && dep.Assembly.Name.Name.EndsWith(".mm", StringComparison.Ordinal)) && (type = FindType(dep, fullName, crawled)) != null)
                     return type;
             return null;
         }
@@ -974,7 +1002,7 @@ namespace MonoMod {
             foreach (Resource res in mod.Resources)
                 if (res is EmbeddedResource) 
                     Module.Resources.Add(new EmbeddedResource(
-                        res.Name.StartsWith(mod.Assembly.Name.Name) ?
+                        res.Name.StartsWith(mod.Assembly.Name.Name, StringComparison.Ordinal) ?
                             Module.Assembly.Name.Name + res.Name.Substring(mod.Assembly.Name.Name.Length) :
                             res.Name,
                         res.Attributes,
@@ -1059,14 +1087,14 @@ namespace MonoMod {
         public virtual void PatchModule(ModuleDefinition mod) {
             foreach (TypeDefinition type in mod.Types)
                 if (
-                    (type.Namespace == "MonoMod" || type.Namespace.StartsWith("MonoMod.")) &&
+                    (type.Namespace == "MonoMod" || type.Namespace.StartsWith("MonoMod.", StringComparison.Ordinal)) &&
                     type.BaseType.FullName == "System.Attribute"
                    )
                     PatchType(type);
 
             foreach (TypeDefinition type in mod.Types)
                 if (!(
-                    (type.Namespace == "MonoMod" || type.Namespace.StartsWith("MonoMod.")) &&
+                    (type.Namespace == "MonoMod" || type.Namespace.StartsWith("MonoMod.", StringComparison.Ordinal)) &&
                     type.BaseType.FullName == "System.Attribute"
                    ))
                     PatchType(type);
@@ -1147,18 +1175,14 @@ namespace MonoMod {
             if (!MatchingConditionals(prop, Module))
                 return;
 
+            prop.Name = prop.GetPatchName();
+
             MethodDefinition addMethod;
 
             PropertyDefinition targetProp = targetType.FindProperty(prop.Name);
             string backingName = $"<{prop.Name}>__BackingField";
             FieldDefinition backing = prop.DeclaringType.FindField(backingName);
             FieldDefinition targetBacking = targetType.FindField(backingName);
-
-            // Cheap fix: Apply the mod property attributes on the mod backing field.
-            // Causes the field to be ignored / replaced / ... in its own patch pass further below.
-            if (backing != null)
-                foreach (CustomAttribute attrib in prop.CustomAttributes)
-                    backing.CustomAttributes.Add(attrib.Clone());
 
             if (prop.HasCustomAttribute("MonoMod.MonoModIgnore")) {
                 // MonoModIgnore is a special case, as registered custom attributes should still be applied.
@@ -1235,17 +1259,13 @@ namespace MonoMod {
         }
 
         public virtual void PatchEvent(TypeDefinition targetType, EventDefinition srcEvent, HashSet<MethodDefinition> propMethods = null) {
+            srcEvent.Name = srcEvent.GetPatchName();
+
             MethodDefinition patched;
             EventDefinition targetEvent = targetType.FindEvent(srcEvent.Name);
             string backingName = $"<{srcEvent.Name}>__BackingField";
             FieldDefinition backing = srcEvent.DeclaringType.FindField(backingName);
             FieldDefinition targetBacking = targetType.FindField(backingName);
-
-            // Cheap fix: Apply the mod property attributes on the mod backing field.
-            // Causes the field to be ignored / replaced / ... in its own patch pass further below.
-            if (backing != null)
-                foreach (CustomAttribute attrib in srcEvent.CustomAttributes)
-                    backing.CustomAttributes.Add(attrib.Clone());
 
             if (srcEvent.HasCustomAttribute("MonoMod.MonoModIgnore")) {
                 // MonoModIgnore is a special case, as registered custom attributes should still be applied.
@@ -1337,6 +1357,8 @@ namespace MonoMod {
             if (field.HasCustomAttribute("MonoMod.MonoModNoNew") || SkipList.Contains(typeName + "::" + field.Name) || !MatchingConditionals(field, Module))
                 return;
 
+            field.Name = field.GetPatchName();
+
             if (field.HasCustomAttribute("MonoMod.MonoModRemove") || field.HasCustomAttribute("MonoMod.MonoModReplace")) {
                 FieldDefinition targetField = targetType.FindField(field.Name);
                 if (targetField != null)
@@ -1369,7 +1391,7 @@ namespace MonoMod {
         }
 
         public virtual MethodDefinition PatchMethod(TypeDefinition targetType, MethodDefinition method) {
-            if (method.Name.StartsWith("orig_") || method.HasCustomAttribute("MonoMod.MonoModOriginal"))
+            if (method.Name.StartsWith("orig_", StringComparison.Ordinal) || method.HasCustomAttribute("MonoMod.MonoModOriginal"))
                 // Ignore original method stubs
                 return null;
 
@@ -1381,6 +1403,9 @@ namespace MonoMod {
 
             if (SkipList.Contains(method.GetID(type: typeName)))
                 return null;
+
+            // Back in the day when patch_ was the only available alternative, this only affected replacements.
+            method.Name = method.GetPatchName();
 
             // If the method's a MonoModConstructor method, just update its attributes to make it look like one.
             if (method.HasCustomAttribute("MonoMod.MonoModConstructor")) {
@@ -1419,7 +1444,6 @@ namespace MonoMod {
             }
 
             if (method.HasCustomAttribute("MonoMod.MonoModReplace")) {
-                method.Name = method.GetPatchName();
                 if (existingMethod != null) {
                     existingMethod.CustomAttributes.Clear();
                     existingMethod.Attributes = method.Attributes;
@@ -1766,7 +1790,7 @@ namespace MonoMod {
         public virtual void Cleanup(bool all = false) {
             for (int i = 0; i < Module.Types.Count; i++) {
                 TypeDefinition type = Module.Types[i];
-                if (all && (type.Namespace.StartsWith("MonoMod") || type.Name.StartsWith("MonoMod"))) {
+                if (all && (type.Namespace.StartsWith("MonoMod", StringComparison.Ordinal) || type.Name.StartsWith("MonoMod", StringComparison.Ordinal))) {
                     Log($"[Cleanup] Removing type {type.Name}");
                     Module.Types.RemoveAt(i);
                     i--;
@@ -1777,8 +1801,8 @@ namespace MonoMod {
 
             Collection<AssemblyNameReference> deps = Module.AssemblyReferences;
             for (int i = deps.Count - 1; i > -1; --i)
-                if ((all && deps[i].Name.StartsWith("MonoMod")) ||
-                    (RemovePatchReferences && deps[i].Name.EndsWith(".mm")))
+                if ((all && deps[i].Name.StartsWith("MonoMod", StringComparison.Ordinal)) ||
+                    (RemovePatchReferences && deps[i].Name.EndsWith(".mm", StringComparison.Ordinal)))
                     deps.RemoveAt(i);
         }
 
@@ -1809,7 +1833,7 @@ namespace MonoMod {
                 TypeReference attribType = attribs[i].AttributeType;
                 if (ShouldCleanupAttrib?.Invoke(cap, attribType) ?? (
                     (attribType.Scope.Name == "MonoMod" || attribType.Scope.Name == "MonoMod.exe" || attribType.Scope.Name == "MonoMod.dll") ||
-                    (attribType.FullName.StartsWith("MonoMod.MonoMod"))
+                    (attribType.FullName.StartsWith("MonoMod.MonoMod", StringComparison.Ordinal))
                 )) {
                     attribs.RemoveAt(i);
                 }
@@ -2159,7 +2183,7 @@ namespace MonoMod {
             if (method.IsGetter || method.IsSetter)
                 return true;
 
-            if (method.Name.StartsWith("op_"))
+            if (method.Name.StartsWith("op_", StringComparison.Ordinal))
                 return true;
 
             return !method.IsRuntimeSpecialName; // Formerly SpecialName. If something breaks, blame UnderRail.

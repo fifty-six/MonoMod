@@ -9,6 +9,11 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Collections.Generic;
+using System.Text;
+using MonoMod.Cil;
+using OpCodes = Mono.Cecil.Cil.OpCodes;
+using System.Diagnostics;
+using System.Linq;
 
 namespace MonoMod.UnitTest {
     public class DynamicMethodDefinitionTest {
@@ -28,10 +33,28 @@ namespace MonoMod.UnitTest {
                 foreach (Instruction instr in dmd.Definition.Body.Instructions) {
                     if (instr.Operand as string == StringOriginal)
                         instr.Operand = StringPatched;
+                    else if (instr.MatchCallOrCallvirt<DynamicMethodDefinitionTest>(nameof(ExampleMethod)))
+                        instr.Operand = dmd.Definition;
                 }
 
                 // Generate a DynamicMethod from the modified MethodDefinition.
                 patched = dmd.Generate();
+            }
+
+            // Generate an entirely new method that just returns a stack trace for further testing.
+            DynamicMethod stacker;
+            using (DynamicMethodDefinition dmd = new DynamicMethodDefinition("Stacker", typeof(StackTrace), new Type[0])) {
+                using (ILContext il = new ILContext(dmd.Definition))
+                    il.Invoke(_ => {
+                        ILCursor c = new ILCursor(il);
+                        for (int i = 0; i < 32; i++)
+                            c.Emit(OpCodes.Nop);
+                        c.Emit(OpCodes.Newobj, typeof(StackTrace).GetConstructor(new Type[0]));
+                        for (int i = 0; i < 32; i++)
+                            c.Emit(OpCodes.Nop);
+                        c.Emit(OpCodes.Ret);
+                    });
+                stacker = (DynamicMethod) DMDEmitDynamicMethodGenerator.Generate(dmd, null);
             }
 
             using (DynamicMethodDefinition dmd = new DynamicMethodDefinition(typeof(ExampleGenericClass<int>).GetMethod(nameof(ExampleMethod)))) {
@@ -87,6 +110,7 @@ namespace MonoMod.UnitTest {
 
             // Run the DynamicMethod.
             Assert.Equal(Tuple.Create(StringPatched, 3), patched.Invoke(null, new object[] { 2 }));
+            Assert.Equal(Tuple.Create(StringPatched, 3), patched.Invoke(null, new object[] { 1337 }));
 
             // Detour the original method to the patched DynamicMethod, then run the patched method.
             using (new Detour(original, patched)) {
@@ -96,6 +120,21 @@ namespace MonoMod.UnitTest {
 
             // Run the original method again.
             Assert.Equal(Tuple.Create(StringOriginal, 10), ExampleMethod(4));
+
+            // Verify that we can still obtain the real DynamicMethod.
+            // .NET uses a wrapping RTDynamicMethod to avoid leaking the mutable DynamicMethod.
+            // Mono uses RuntimeMethodInfo without any link to the original DynamicMethod.
+            if (Type.GetType("Mono.Runtime") != null)
+                stacker.Pin();
+            StackTrace stack = ((Func<StackTrace>) stacker.CreateDelegate(typeof(Func<StackTrace>)))();
+            MethodBase stacked = stack.GetFrames().First(f => f.GetMethod()?.IsDynamicMethod() ?? false).GetMethod();
+            Assert.NotEqual(stacker, stacked);
+            Assert.Equal(stacker, stacked.GetIdentifiable());
+            Assert.Equal(stacker.GetNativeStart(), stacked.GetNativeStart());
+            // This will always be true on .NET and only be true on Mono if the method is still pinned.
+            Assert.IsAssignableFrom<DynamicMethod>(stacked.GetIdentifiable());
+            if (Type.GetType("Mono.Runtime") != null)
+                stacker.Unpin();
         }
 
         public const string StringOriginal = "Hello from ExampleMethod!";
@@ -104,6 +143,9 @@ namespace MonoMod.UnitTest {
         public static volatile int Counter;
 
         public static Tuple<string, int> ExampleMethod(int i) {
+            if (i == 1337)
+                return ExampleMethod(0);
+
             TestObjectGeneric<string> test = new TestObjectGeneric<string>();
             try {
                 Console.WriteLine(StringOriginal);
@@ -151,19 +193,19 @@ namespace MonoMod.UnitTest {
         }
 
         public static int TargetTest<T>(string a, string b, string c) {
-            return (a + b + c).GetHashCode();
+            return (a + b + c).GetHashCode(StringComparison.Ordinal);
         }
 
         public static int TargetTest(string a, string b, string c) {
-            return (a + b + c).GetHashCode();
+            return (a + b + c).GetHashCode(StringComparison.Ordinal);
         }
 
         public static int TargetTest<T>(string a, T b) {
-            return (a + b).GetHashCode();
+            return (a + b).GetHashCode(StringComparison.Ordinal);
         }
 
         public static int TargetTest<T>(string a, ref T b) {
-            return (a + b).GetHashCode();
+            return (a + b).GetHashCode(StringComparison.Ordinal);
         }
 
         public static int TargetTest<TA>() {

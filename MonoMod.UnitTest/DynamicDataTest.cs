@@ -5,6 +5,7 @@ using MonoMod.Utils;
 using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Collections.Generic;
 
 namespace MonoMod.UnitTest {
     public class DynamicDataTest {
@@ -32,6 +33,7 @@ namespace MonoMod.UnitTest {
             data.RegisterMethod("NewMethod", new Func<object, object[], object>((target, args) => (int) args[0] * (int) args[1]));
             Assert.Equal(6, data.PublicMethod(4, 2));
             Assert.Equal(2, data.PrivateMethod(4, 2));
+            Assert.Equal(16, data.PrivateBaseMethod(4, 2));
             Assert.Equal(8, data.NewMethod(4, 2));
 
             Assert.Equal("ABC", new DynamicData(dummy).Get<string>("New"));
@@ -58,13 +60,37 @@ namespace MonoMod.UnitTest {
 
             dummy = DynamicData.New<Dummy>()(new {
                 A = 30,
+                B = 60L,
+                C = "90",
                 Other = "Newest"
             });
             Assert.Equal(30, dummy.A);
+            Assert.Equal(60L, dummy._B);
+            Assert.Equal("90", dummy._C);
             Assert.Equal("Newest", new DynamicData(dummy).Get<string>("Other"));
+
+            Dummy dummyTo = new Dummy();
+            Assert.Equal(69, dummyTo.A);
+            Assert.Equal(420L, dummyTo._B);
+            Assert.Equal("XYZ", dummyTo._C);
+
+            DynamicData dataTo = DynamicData.For(dummyTo);
+            Assert.Equal(dataTo, DynamicData.For(dummyTo));
+            foreach (KeyValuePair<string, object> kvp in new DynamicData(dummy))
+                dataTo.Set(kvp.Key, kvp.Value);
+            Assert.Equal(30, dummyTo.A);
+            Assert.Equal(60L, dummyTo._B);
+            Assert.Equal("90", dummyTo._C);
+            Assert.Equal("Newest", new DynamicData(dummyTo).Get<string>("Other"));
         }
 
-        public class Dummy {
+        public class DummyBase {
+
+            private int PrivateBaseMethod(int a, int b) => a * b * b;
+
+        }
+
+        public class Dummy : DummyBase {
 
             public int A = 69;
             private long B = 420L;

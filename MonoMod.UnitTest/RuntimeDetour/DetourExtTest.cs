@@ -13,6 +13,9 @@ using System.IO;
 using System.Diagnostics;
 using System.Data.SqlClient;
 using Mono.Cecil;
+using MonoMod.RuntimeDetour.Platforms;
+using System.Globalization;
+using System.Collections.Generic;
 
 namespace MonoMod.UnitTest {
     [Collection("RuntimeDetour")]
@@ -22,6 +25,9 @@ namespace MonoMod.UnitTest {
             lock (TestObject.Lock) {
                 // The following use cases are not meant to be usage examples.
                 // Please take a look at DetourTest and HookTest instead.
+
+                // Just to verify that having a first chance exception handler doesn't introduce any conflicts.
+                AppDomain.CurrentDomain.FirstChanceException += OnFirstChanceException;
 
 #if true
                 using (NativeDetour d = new NativeDetour(
@@ -57,6 +63,32 @@ namespace MonoMod.UnitTest {
                     Console.WriteLine($"TestStaticMethod(2, 3): {staticResult}");
                     Assert.Equal(12, staticResult);
                 }
+#endif
+
+                // This wasn't provided by anyone and instead is just an internal test.
+#if true
+                MethodInfo dummyA = typeof(DetourExtTest).GetMethod("DummyA").Pin();
+                MethodInfo dummyB = typeof(DetourExtTest).GetMethod("DummyB").Pin();
+                MethodInfo dummyC = (MethodInfo) dm;
+                IntPtr dummyAPtr = dummyA.GetNativeStart();
+                Assert.True(DetourHelper.Runtime.TryMemAllocScratchCloseTo(dummyAPtr, out IntPtr allocAPtr, -1) != 0);
+                Assert.NotEqual(IntPtr.Zero, allocAPtr);
+                IntPtr dummyBPtr = dummyB.GetNativeStart();
+                Assert.True(DetourHelper.Runtime.TryMemAllocScratchCloseTo(dummyBPtr, out IntPtr allocBPtr, -1) != 0);
+                Assert.NotEqual(IntPtr.Zero, allocBPtr);
+                IntPtr dummyCPtr = dummyC.GetNativeStart();
+                Assert.True(DetourHelper.Runtime.TryMemAllocScratchCloseTo(dummyCPtr, out IntPtr allocCPtr, -1) != 0);
+                Assert.NotEqual(IntPtr.Zero, allocCPtr);
+                Console.WriteLine($"dummyAPtr: 0x{(long) dummyAPtr:X16}");
+                Console.WriteLine($"allocAPtr: 0x{(long) allocAPtr:X16}");
+                Console.WriteLine($"dummyBPtr: 0x{(long) dummyBPtr:X16}");
+                Console.WriteLine($"allocBPtr: 0x{(long) allocBPtr:X16}");
+                Console.WriteLine($"dummyCPtr: 0x{(long) dummyCPtr:X16}");
+                Console.WriteLine($"allocCPtr: 0x{(long) allocCPtr:X16}");
+                // Close scratch allocs should ideally be within a 1 GiB range of the original method.
+                Assert.True(Math.Abs((long) dummyAPtr - (long) allocAPtr) < 1024 * 1024 * 1024, "dummyAPtr and allocAPtr are too far apart.");
+                Assert.True(Math.Abs((long) dummyBPtr - (long) allocBPtr) < 1024 * 1024 * 1024, "dummyBPtr and allocBPtr are too far apart.");
+                Assert.True(Math.Abs((long) dummyCPtr - (long) allocCPtr) < 1024 * 1024 * 1024, "dummyCPtr and allocCPtr are too far apart.");
 #endif
 
                 // This was provided by Chicken Bones (tModLoader).
@@ -177,11 +209,180 @@ namespace MonoMod.UnitTest {
                 }
 #endif
 
+                // This was provided by a Harmony user.
+                // Theoretically this should be a DynamicMethodDefinition test but who knows what else this will unearth.
+#if true
+                try {
+                    new Thrower(1);
+                } catch (Exception e) {
+                    Assert.Equal("1", e.Message);
+                }
+
+                using (Hook h = new Hook(
+                    typeof(Thrower).GetConstructor(new Type[] { typeof(int) }),
+                    new Action<Action<Thrower, int>, Thrower, int>((orig, self, a) => {
+                        try {
+                            orig(self, a + 2);
+                        } catch (Exception e) {
+                            throw new Exception($"{a} + 2 = {e.Message}");
+                        }
+                    })
+                )) {
+                    try {
+                        new Thrower(1);
+                    } catch (Exception e) {
+                        Assert.Equal("1 + 2 = 3", e.Message);
+                    }
+                }
+
+                try {
+                    new Thrower(1);
+                } catch (Exception e) {
+                    Assert.Equal("1", e.Message);
+                }
+#endif
+
+                // This was provided by tModLoader.
+#if true
+                using (Hook h = new Hook(
+                    typeof(Process).GetMethod("Start", BindingFlags.Public | BindingFlags.Instance),
+                    new Func<Func<Process, bool>, Process, bool>((orig, self) => {
+                        return orig(self);
+                    })
+                )) {
+                }
+#endif
+
+                // This was provided by WEGFan from the Everest team.
+                // It should be preferably tested on x86, as it's where the struct size caused problems.
+#if true
+                Assert.Equal(new TwoInts() {
+                    A = 0x11111111,
+                    B = 0x22222222
+                }, DummyTwoInts());
+
+                using (Hook h = new Hook(
+                    typeof(DetourExtTest).GetMethod("DummyTwoInts", BindingFlags.NonPublic | BindingFlags.Instance),
+                    new Func<Func<DetourExtTest, TwoInts>, DetourExtTest, TwoInts>((orig, self) => {
+                        TwoInts rv = orig(self);
+                        rv.A *= 2;
+                        rv.B *= 3;
+                        return rv;
+                    })
+                )) {
+                    Assert.Equal(new TwoInts() {
+                        A = 0x11111111 * 2,
+                        B = 0x22222222 * 3
+                    }, DummyTwoInts());
+                }
+
+                Assert.Equal(new TwoInts() {
+                    A = 0x11111111,
+                    B = 0x22222222
+                }, DummyTwoInts());
+#endif
+
+                // This was provided by a Harmony user.
+                // The "struct virtual override" edge case fix itself has got a weird edge case with "struct interface implementations".
+                // Note that .NET Framework differs too heavily and .NET Core 2.1 and older inline the getter.
+#if NET5_0_OR_GREATER
+                Assert.Equal(
+                    new KeyValuePair<int, int>(default, default),
+                    new Dictionary<int, int>().GetEnumerator().Current
+                );
+
+                using (Hook h = new Hook(
+                    typeof(Dictionary<int, int>.Enumerator).GetMethod("get_Current"),
+                    new hook_DictionaryEnumeratorCurrentIntInt(DictionaryEnumeratorCurrentIntInt)
+                )) {
+                    Assert.Equal(
+                        new KeyValuePair<int, int>(1, 1),
+                        new Dictionary<int, int>().GetEnumerator().Current
+                    );
+                }
+
+                Assert.Equal(
+                    new KeyValuePair<int, int>(default, default),
+                    new Dictionary<int, int>().GetEnumerator().Current
+                );
+
+                Assert.Equal(
+                    new KeyValuePair<string, int>(default, default),
+                    new Dictionary<string, int>().GetEnumerator().Current
+                );
+
+                using (Hook h = new Hook(
+                    typeof(Dictionary<string, int>.Enumerator).GetMethod("get_Current"),
+                    new hook_DictionaryEnumeratorCurrentStringInt(DictionaryEnumeratorCurrentStringInt)
+                )) {
+                    Assert.Equal(
+                        new KeyValuePair<string, int>("1", 1),
+                        new Dictionary<string, int>().GetEnumerator().Current
+                    );
+                }
+
+                Assert.Equal(
+                    new KeyValuePair<string, int>(default, default),
+                    new Dictionary<string, int>().GetEnumerator().Current
+                );
+#endif
+
+
+                AppDomain.CurrentDomain.FirstChanceException -= OnFirstChanceException;
+
             }
+        }
+
+        private void OnFirstChanceException(object sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e) {
+            // nop
         }
 
         public static int TestStaticMethod_A(int a, int b) {
             return a * b * 2;
+        }
+
+        public class Thrower {
+            int b;
+            public Thrower(int a) {
+                throw new Exception(a.ToString(CultureInfo.InvariantCulture));
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining | /* AggressiveOptimization */ ((MethodImplOptions) 512))]
+        public static int DummyA(int a, int b) {
+            return a * b * 2;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining | /* AggressiveOptimization */ ((MethodImplOptions) 512))]
+        public static int DummyB(int a, int b) {
+            return a * b * 2;
+        }
+
+        public struct TwoInts {
+            public int A;
+            public int B;
+            public override string ToString()
+                => $"({A}, {B})";
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private TwoInts DummyTwoInts() {
+            return new TwoInts() {
+                A = 0x11111111,
+                B = 0x22222222
+            };
+        }
+
+        private delegate KeyValuePair<int, int> orig_DictionaryEnumeratorCurrentIntInt(ref Dictionary<int, int>.Enumerator self);
+        private delegate KeyValuePair<int, int> hook_DictionaryEnumeratorCurrentIntInt(orig_DictionaryEnumeratorCurrentIntInt orig, ref Dictionary<int, int>.Enumerator self); 
+        private static KeyValuePair<int, int> DictionaryEnumeratorCurrentIntInt(orig_DictionaryEnumeratorCurrentIntInt orig, ref Dictionary<int, int>.Enumerator self) {
+            return new KeyValuePair<int, int>(1, 1);
+        }
+
+        private delegate KeyValuePair<string, int> orig_DictionaryEnumeratorCurrentStringInt(ref Dictionary<string, int>.Enumerator self);
+        private delegate KeyValuePair<string, int> hook_DictionaryEnumeratorCurrentStringInt(orig_DictionaryEnumeratorCurrentStringInt orig, ref Dictionary<string, int>.Enumerator self);
+        private static KeyValuePair<string, int> DictionaryEnumeratorCurrentStringInt(orig_DictionaryEnumeratorCurrentStringInt orig, ref Dictionary<string, int>.Enumerator self) {
+            return new KeyValuePair<string, int>("1", 1);
         }
 
     }

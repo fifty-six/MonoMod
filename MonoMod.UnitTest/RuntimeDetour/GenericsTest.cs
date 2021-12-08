@@ -1,4 +1,5 @@
-﻿using MonoMod.RuntimeDetour;
+﻿#nullable enable
+using MonoMod.RuntimeDetour;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -10,8 +11,37 @@ using Xunit;
 namespace MonoMod.UnitTest {
     public class GenericsTest {
         #region Basic generics
+        private struct SmallHfa {
+            float A;
+        }
+        private struct SmallishHfa {
+            double A;
+        }
+        private struct BigishHfa {
+            float A;
+            float B;
+        }
+        private struct BigHfa {
+            double A;
+            double B;
+        }
+        private struct NotHfa {
+            int A;
+            int B;
+        }
+
         [Fact]
         public void TestGenerics() {
+
+            // this is a temporary place for me to easily test this
+            var method = typeof(GenericsTest).GetMethod(nameof(ToWithThis2S), BindingFlags.NonPublic | BindingFlags.Static);
+            foreach (var ty in new[] { typeof(SmallHfa), typeof(SmallishHfa), typeof(BigishHfa), typeof(BigHfa), typeof(NotHfa) }) { 
+                var meth = method.MakeGenericMethod(ty, ty);
+                var @params = meth.GetParameters().Select(method => method.ParameterType);
+                DetourHelper.Runtime.RegisterAllocator.Allocate(
+                    DetourHelper.Runtime.Abi, @params,
+                    out var kinds, out var stackPassed);
+            }
 
             int handle;
 

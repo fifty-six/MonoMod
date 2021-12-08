@@ -78,11 +78,11 @@ namespace MonoMod.UnitTest {
         }
 
         private static void ToWithThis<T>(object thisObj, T value) {
-            Assert.IsType<GenericSrc<T>>(thisObj);
+            _ = Assert.IsType<GenericSrc<T>>(thisObj);
             To(value);
         }
         private static void ToWithThis2<T, T2>(object thisObj, T value, T2 value2) {
-            Assert.IsType<GenericSrc<T>>(thisObj);
+            _ = Assert.IsType<GenericSrc<T>>(thisObj);
             To(value2);
             To(value);
         }
@@ -192,11 +192,11 @@ namespace MonoMod.UnitTest {
         }
 
         private static void ToWithThisS<T>(object thisObj, T value, int a, int b, int c, int d, int e, int f) {
-            Assert.IsType<GenericSrc<T>>(thisObj);
+            _ = Assert.IsType<GenericSrc<T>>(thisObj);
             ToS(value, a, b, c, d, e, f);
         }
         private static void ToWithThis2S<T, T2>(object thisObj, T value, T2 value2, int a, int b, int c, int d, int e, int f) {
-            Assert.IsType<GenericSrc<T>>(thisObj);
+            _ = Assert.IsType<GenericSrc<T>>(thisObj);
             ToS(value2, a, b, c, d, e, f);
             ToS(value, a, b, c, d, e, f);
         }
@@ -313,11 +313,11 @@ namespace MonoMod.UnitTest {
         }
 
         private static decimal ToWithThisR<T>(object thisObj, T value) {
-            Assert.IsType<GenericSrc<T>>(thisObj);
+            _ = Assert.IsType<GenericSrc<T>>(thisObj);
             return ToR(value);
         }
         private static decimal ToWithThisR2<T, T2>(object thisObj, T value, T2 value2) {
-            Assert.IsType<GenericSrc<T>>(thisObj);
+            _ = Assert.IsType<GenericSrc<T>>(thisObj);
             _ = ToR(value2);
             return ToR(value);
         }

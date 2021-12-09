@@ -11,37 +11,8 @@ using Xunit;
 namespace MonoMod.UnitTest {
     public class GenericsTest {
         #region Basic generics
-        private struct SmallHfa {
-            float A;
-        }
-        private struct SmallishHfa {
-            double A;
-        }
-        private struct BigishHfa {
-            float A;
-            float B;
-        }
-        private struct BigHfa {
-            double A;
-            double B;
-        }
-        private struct NotHfa {
-            int A;
-            int B;
-        }
-
         [Fact]
         public void TestGenerics() {
-
-            // this is a temporary place for me to easily test this
-            var method = typeof(GenericsTest).GetMethod(nameof(ToWithThis2S), BindingFlags.NonPublic | BindingFlags.Static);
-            foreach (var ty in new[] { typeof(SmallHfa), typeof(SmallishHfa), typeof(BigishHfa), typeof(BigHfa), typeof(NotHfa) }) { 
-                var meth = method.MakeGenericMethod(ty, ty);
-                var @params = meth.GetParameters().Select(method => method.ParameterType);
-                DetourHelper.Runtime.RegisterAllocator.Allocate(
-                    DetourHelper.Runtime.Abi, @params,
-                    out var kinds, out var stackPassed);
-            }
 
             int handle;
 
@@ -99,9 +70,9 @@ namespace MonoMod.UnitTest {
 
         private static void To<T>(T value) {
             if (typeof(T) == typeof(string)) {
-                Assert.Equal("hello", (string) (object) value);
+                Assert.Equal("hello", (string?) (object?) value);
             } else if (typeof(T) == typeof(int)) {
-                Assert.Equal(42, (int) (object) value);
+                Assert.Equal(42, (int) (object) value!);
             } else {
                 Assert.True(false, $"To called with invalid type parameter {typeof(T)}");
             }
@@ -207,9 +178,9 @@ namespace MonoMod.UnitTest {
 
         private static void ToS<T>(T value, int a, int b, int c, int d, int e, int f) {
             if (typeof(T) == typeof(string)) {
-                Assert.Equal("hello", (string) (object) value);
+                Assert.Equal("hello", (string?) (object?) value);
             } else if (typeof(T) == typeof(int)) {
-                Assert.Equal(42, (int) (object) value);
+                Assert.Equal(42, (int) (object) value!);
             } else {
                 Assert.True(false, $"To called with invalid type parameter {typeof(T)}");
             }
@@ -332,9 +303,9 @@ namespace MonoMod.UnitTest {
 
         private static decimal ToR<T>(T value) {
             if (typeof(T) == typeof(string)) {
-                Assert.Equal("hello", (string) (object) value);
+                Assert.Equal("hello", (string?) (object?) value);
             } else if (typeof(T) == typeof(int)) {
-                Assert.Equal(42, (int) (object) value);
+                Assert.Equal(42, (int) (object) value!);
             } else {
                 Assert.True(false, $"To called with invalid type parameter {typeof(T)}");
             }
@@ -435,9 +406,9 @@ namespace MonoMod.UnitTest {
 
         private static decimal ToSR<T>(T value, int a, int b, int c, int d, int e, int f) {
             if (typeof(T) == typeof(string)) {
-                Assert.Equal("hello", (string) (object) value);
+                Assert.Equal("hello", (string?) (object?) value);
             } else if (typeof(T) == typeof(int)) {
-                Assert.Equal(42, (int) (object) value);
+                Assert.Equal(42, (int) (object) value!);
             } else {
                 Assert.True(false, $"To called with invalid type parameter {typeof(T)}");
             }

@@ -51,25 +51,25 @@ namespace MonoMod {
 
         public static readonly Version Version = typeof(MonoModder).Assembly.GetName().Version;
 
-        public Dictionary<string, object> SharedData = new Dictionary<string, object>();
+        public Dictionary<string, object> SharedData = new();
 
-        public Dictionary<string, object> RelinkMap = new Dictionary<string, object>();
-        public Dictionary<string, ModuleDefinition> RelinkModuleMap = new Dictionary<string, ModuleDefinition>();
-        public HashSet<string> SkipList = new HashSet<string>(EqualityComparer<string>.Default);
+        public Dictionary<string, object> RelinkMap = new();
+        public Dictionary<string, ModuleDefinition> RelinkModuleMap = new();
+        public HashSet<string> SkipList = new(EqualityComparer<string>.Default);
 
-        public Dictionary<string, IMetadataTokenProvider> RelinkMapCache = new Dictionary<string, IMetadataTokenProvider>();
-        public Dictionary<string, TypeReference> RelinkModuleMapCache = new Dictionary<string, TypeReference>();
+        public Dictionary<string, IMetadataTokenProvider> RelinkMapCache = new();
+        public Dictionary<string, TypeReference> RelinkModuleMapCache = new();
 
-        public Dictionary<string, OpCode> ForceCallMap = new Dictionary<string, OpCode>();
+        public Dictionary<string, OpCode> ForceCallMap = new();
 
         public ModReadEventHandler OnReadMod;
         public PostProcessor PostProcessors;
 
-        public Dictionary<string, Action<object, object[]>> CustomAttributeHandlers = new Dictionary<string, Action<object, object[]>>() {
+        public Dictionary<string, Action<object, object[]>> CustomAttributeHandlers = new() {
             // Dummy handlers for modifiers which should be preserved until cleanup.
             { "MonoMod.MonoModPublic", (_1, _2) => {} }
         };
-        public Dictionary<string, Action<object, object[]>> CustomMethodAttributeHandlers = new Dictionary<string, Action<object, object[]>>();
+        public Dictionary<string, Action<object, object[]>> CustomMethodAttributeHandlers = new();
 
         public MissingDependencyResolver MissingDependencyResolver;
 
@@ -81,11 +81,11 @@ namespace MonoMod {
         public string InputPath;
         public Stream Output;
         public string OutputPath;
-        public List<string> DependencyDirs = new List<string>();
+        public List<string> DependencyDirs = new();
         public ModuleDefinition Module;
 
-        public Dictionary<ModuleDefinition, List<ModuleDefinition>> DependencyMap = new Dictionary<ModuleDefinition, List<ModuleDefinition>>();
-        public Dictionary<string, ModuleDefinition> DependencyCache = new Dictionary<string, ModuleDefinition>();
+        public Dictionary<ModuleDefinition, List<ModuleDefinition>> DependencyMap = new();
+        public Dictionary<string, ModuleDefinition> DependencyCache = new();
 
         public Func<ICustomAttributeProvider, TypeReference, bool> ShouldCleanupAttrib;
 
@@ -93,7 +93,7 @@ namespace MonoMod {
         public bool CleanupEnabled;
         public bool PublicEverything;
 
-        public List<ModuleReference> Mods = new List<ModuleReference>();
+        public List<ModuleReference> Mods = new();
 
         public bool Strict;
         public bool MissingDependencyThrow;

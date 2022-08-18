@@ -16,8 +16,8 @@ namespace MonoMod.InlineRT {
         private static readonly Assembly MonoModAsm = typeof(MonoModRulesManager).Assembly;
 
         private static long PrevID;
-        private static readonly Dictionary<long, WeakReference> ModderMap = new Dictionary<long, WeakReference>();
-        private static readonly Dictionary<WeakReference, long> IDMap = new Dictionary<WeakReference, long>(new WeakReferenceComparer());
+        private static readonly Dictionary<long, WeakReference> ModderMap = new();
+        private static readonly Dictionary<WeakReference, long> IDMap = new(new WeakReferenceComparer());
 
         public static MonoModder Modder {
             get {

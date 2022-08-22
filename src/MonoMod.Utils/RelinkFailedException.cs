@@ -26,7 +26,7 @@ namespace MonoMod.Utils {
             Context = context;
         }
 
-        public RelinkFailedException(string message, Exception innerException,
+        public RelinkFailedException(string? message, Exception innerException,
             IMetadataTokenProvider mtp, IMetadataTokenProvider? context = null)
             : base(message ?? _Format(DefaultMessage, mtp, context), innerException) {
             MTP = mtp;
@@ -42,13 +42,13 @@ namespace MonoMod.Utils {
             builder.Append(" ");
 
             if (mtp != null)
-                builder.Append(mtp.ToString());
+                builder.Append(mtp);
 
             if (context != null)
                 builder.Append(" ");
 
             if (context != null)
-                builder.Append("(context: ").Append(context.ToString()).Append(")");
+                builder.Append("(context: ").Append(context).Append(")");
 
             return builder.ToString();
         }

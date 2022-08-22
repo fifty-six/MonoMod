@@ -7,6 +7,7 @@ namespace MonoMod {
     /// Or apply it onto a method and it will be handled like a constructor.
     /// </summary>
     [MonoMod__SafeToCopy__]
+    [AttributeUsage(AttributeTargets.Constructor)]
     public class MonoModConstructor : Attribute {
     }
 }

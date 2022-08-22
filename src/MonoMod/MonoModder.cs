@@ -6,15 +6,16 @@ using Mono.Collections.Generic;
 using MonoMod.InlineRT;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using MonoMod.Utils;
 using ExceptionHandler = Mono.Cecil.Cil.ExceptionHandler;
 using MonoMod.Cil;
+using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics.Contracts;
 using System.Globalization;
+using JetBrains.Annotations;
 
 #if CECIL0_9
 using InterfaceImplementation = Mono.Cecil.TypeReference;
@@ -29,12 +30,11 @@ namespace MonoMod {
     public delegate void PostProcessor(MonoModder modder);
     public delegate void ModReadEventHandler(MonoModder modder, ModuleDefinition mod);
 
+    [PublicAPI]
     public class RelinkMapEntry {
         public string Type;
         public string FindableID;
 
-        public RelinkMapEntry() {
-        }
         public RelinkMapEntry(string type, string findableID) {
             Type = type;
             FindableID = findableID;
@@ -47,9 +47,11 @@ namespace MonoMod {
         PDB
     }
 
+    [PublicAPI]
+    [SuppressMessage("ReSharper", "PossibleInvalidCastExceptionInForeachLoop")]
     public class MonoModder : IDisposable {
 
-        public static readonly Version Version = typeof(MonoModder).Assembly.GetName().Version;
+        public static readonly Version Version = typeof(MonoModder).Assembly.GetName().Version!;
 
         public Dictionary<string, object> SharedData = new();
 
@@ -62,79 +64,86 @@ namespace MonoMod {
 
         public Dictionary<string, OpCode> ForceCallMap = new();
 
-        public ModReadEventHandler OnReadMod;
-        public PostProcessor PostProcessors;
+        public ModReadEventHandler? OnReadMod;
+        public PostProcessor? PostProcessors;
 
-        public Dictionary<string, Action<object, object[]>> CustomAttributeHandlers = new() {
+        public Dictionary<string, Action<object?, object[]>> CustomAttributeHandlers = new() {
             // Dummy handlers for modifiers which should be preserved until cleanup.
-            { "MonoMod.MonoModPublic", (_1, _2) => {} }
+            { "MonoMod.MonoModPublic", (_, _) => {} }
         };
+        
         public Dictionary<string, Action<object, object[]>> CustomMethodAttributeHandlers = new();
 
         public MissingDependencyResolver MissingDependencyResolver;
 
         public MethodParser MethodParser;
-        public MethodRewriter MethodRewriter;
-        public MethodBodyRewriter MethodBodyRewriter;
+        public MethodRewriter? MethodRewriter;
+        public MethodBodyRewriter? MethodBodyRewriter;
 
-        public Stream Input;
-        public string InputPath;
-        public Stream Output;
-        public string OutputPath;
-        public List<string> DependencyDirs = new();
-        public ModuleDefinition Module;
+        public Stream?      Input          { get; set; }
+        public string?      InputPath      { get; set; }
+        public Stream?      Output         { get; set; }
+        public string?      OutputPath     { get; set; }
+        public List<string> DependencyDirs { get; set; } = new();
+
+        private ModuleDefinition? _module;
+        public ModuleDefinition Module
+        { 
+            get => _module ?? throw new InvalidOperationException("No module has been read!");
+            set => _module = value ?? throw new ArgumentNullException(nameof(value));
+        }
 
         public Dictionary<ModuleDefinition, List<ModuleDefinition>> DependencyMap = new();
         public Dictionary<string, ModuleDefinition> DependencyCache = new();
 
-        public Func<ICustomAttributeProvider, TypeReference, bool> ShouldCleanupAttrib;
+        public Func<ICustomAttributeProvider, TypeReference, bool>? ShouldCleanupAttrib;
 
-        public bool LogVerboseEnabled;
-        public bool CleanupEnabled;
-        public bool PublicEverything;
+        public bool LogVerboseEnabled { get; set; }
+        public bool CleanupEnabled    { get; set; }
+        public bool PublicEverything  { get; set; }
 
-        public List<ModuleReference> Mods = new();
+        public readonly List<ModuleReference> Mods = new();
 
-        public bool Strict;
-        public bool MissingDependencyThrow;
-        public bool RemovePatchReferences;
-        public bool PreventInline;
-        public bool? UpgradeMSCORLIB;
+        public bool  Strict                 { get; set; }
+        public bool  MissingDependencyThrow { get; set; }
+        public bool  RemovePatchReferences  { get; set; }
+        public bool  PreventInline          { get; set; }
+        public bool? UpgradeMscorlib        { get; set; }
 
         public ReadingMode ReadingMode = ReadingMode.Immediate;
         public DebugSymbolFormat DebugSymbolOutputFormat = DebugSymbolFormat.Auto;
 
-        public int CurrentRID = 0;
+        public int CurrentRID;
 
-        protected IAssemblyResolver _assemblyResolver;
+        protected IAssemblyResolver? _assemblyResolver;
         public virtual IAssemblyResolver AssemblyResolver {
             get {
-                if (_assemblyResolver == null) {
-                    DefaultAssemblyResolver assemblyResolver = new DefaultAssemblyResolver();
-                    foreach (string dir in DependencyDirs)
-                        assemblyResolver.AddSearchDirectory(dir);
-                    _assemblyResolver = assemblyResolver;
-                }
-                return _assemblyResolver;
+                if (_assemblyResolver != null) 
+                    return _assemblyResolver;
+                
+                DefaultAssemblyResolver assemblyResolver = new DefaultAssemblyResolver();
+                foreach (string dir in DependencyDirs)
+                    assemblyResolver.AddSearchDirectory(dir);
+                
+                return _assemblyResolver = assemblyResolver;
             }
             set => _assemblyResolver = value;
         }
 
-        protected ReaderParameters _readerParameters;
+        protected ReaderParameters? _readerParameters;
         public virtual ReaderParameters ReaderParameters {
-            get {
-                if (_readerParameters == null) {
-                    _readerParameters = new ReaderParameters(ReadingMode) {
-                        AssemblyResolver = AssemblyResolver,
-                        ReadSymbols = true
-                    };
-                }
-                return _readerParameters;
+            get
+            {
+                return _readerParameters ??= new ReaderParameters(ReadingMode)
+                {
+                    AssemblyResolver = AssemblyResolver,
+                    ReadSymbols = true
+                };
             }
             set => _readerParameters = value;
         }
 
-        protected WriterParameters _writerParameters;
+        protected WriterParameters? _writerParameters;
         public virtual WriterParameters WriterParameters {
             get {
                 if (_writerParameters == null) {
@@ -165,8 +174,8 @@ namespace MonoMod {
 
         public bool GACEnabled;
 
-        private string[] _GACPathsNone = new string[0];
-        protected string[] _GACPaths;
+        private string[] _GACPathsNone = Array.Empty<string>();
+        protected string[]? _GACPaths;
         public string[] GACPaths {
             get {
                 // .NET Core doesn't have a GAC.
@@ -194,11 +203,11 @@ namespace MonoMod {
                     };
 
                 } else {
-                    List<string> paths = new List<string>();
+                    var paths = new List<string>();
                     string gac = Path.Combine(
                         Path.GetDirectoryName(
                             Path.GetDirectoryName(typeof(object).Module.FullyQualifiedName)
-                        ),
+                        )!,
                         "gac"
                     );
                     if (Directory.Exists(gac))
@@ -212,9 +221,7 @@ namespace MonoMod {
                                 continue;
 
                             string path = prefix;
-                            path = Path.Combine(path, "lib");
-                            path = Path.Combine(path, "mono");
-                            path = Path.Combine(path, "gac");
+                            path = Path.Combine(path, "lib", "mono", "gac");
                             if (Directory.Exists(path) && !paths.Contains(path))
                                 paths.Add(path);
                         }
@@ -254,16 +261,19 @@ namespace MonoMod {
             RemovePatchReferences = Environment.GetEnvironmentVariable("MONOMOD_DEPENDENCY_REMOVE_PATCH") != "0";
 
             string envDebugSymbolFormat = Environment.GetEnvironmentVariable("MONOMOD_DEBUG_FORMAT");
-            if (envDebugSymbolFormat != null) {
+            if (envDebugSymbolFormat != null)
+            {
                 envDebugSymbolFormat = envDebugSymbolFormat.ToLower(CultureInfo.InvariantCulture);
-                if (envDebugSymbolFormat == "pdb")
-                    DebugSymbolOutputFormat = DebugSymbolFormat.PDB;
-                else if (envDebugSymbolFormat == "mdb")
-                    DebugSymbolOutputFormat = DebugSymbolFormat.MDB;
+                DebugSymbolOutputFormat = envDebugSymbolFormat switch
+                {
+                    "pdb" => DebugSymbolFormat.PDB,
+                    "mdb" => DebugSymbolFormat.MDB,
+                    _ => DebugSymbolOutputFormat
+                };
             }
 
             string upgradeMSCORLIBStr = Environment.GetEnvironmentVariable("MONOMOD_MSCORLIB_UPGRADE");
-            UpgradeMSCORLIB = string.IsNullOrEmpty(upgradeMSCORLIBStr) ? (bool?) null : (upgradeMSCORLIBStr != "0");
+            UpgradeMscorlib = string.IsNullOrEmpty(upgradeMSCORLIBStr) ? null : (upgradeMSCORLIBStr != "0");
 
             GACEnabled =
 #if NETFRAMEWORK
@@ -294,22 +304,21 @@ namespace MonoMod {
             ClearCaches(all: true);
 
 #if !CECIL0_9
-            Module?.Dispose();
+            Module.Dispose();
 #endif
-            Module = null;
+            _module = null;
 
 #if !CECIL0_9
-            AssemblyResolver?.Dispose();
+            AssemblyResolver.Dispose();
 #endif
-            AssemblyResolver = null;
+            _assemblyResolver = null;
 
 #if !CECIL0_9
             foreach (ModuleDefinition mod in Mods)
-                mod?.Dispose();
+                mod.Dispose();
 
-            foreach (List<ModuleDefinition> dependencies in DependencyMap.Values)
-                foreach (ModuleDefinition dep in dependencies)
-                    dep?.Dispose();
+            foreach (ModuleDefinition dep in DependencyMap.Values.SelectMany(d => d))
+                dep?.Dispose();
 #endif
             DependencyMap.Clear();
 
@@ -318,7 +327,7 @@ namespace MonoMod {
         }
 
         public virtual void Log(object value) {
-            Log(value.ToString());
+            Log(value.ToString() ?? "(object with null ToString())");
         }
         public virtual void Log(string text) {
             Console.Write("[MonoMod] ");
@@ -348,6 +357,7 @@ namespace MonoMod {
             return ModuleDefinition.ReadModule(input, args);
         }
 
+        [SuppressMessage("CA1031", "We're re-trying without symbols")]
         private static ModuleDefinition _ReadModule(string input, ReaderParameters args) {
             if (args.ReadSymbols) {
                 try {
@@ -362,23 +372,25 @@ namespace MonoMod {
         /// <summary>
         /// Reads the main module from the Input stream / InputPath file to Module.
         /// </summary>
-        public virtual void Read() {
-            if (Module == null) {
-                if (Input != null) {
-                    Log("Reading input stream into module.");
-                    Module = _ReadModule(Input, GenReaderParameters(true));
-                } else if (InputPath != null) {
-                    Log("Reading input file into module.");
-                    (AssemblyResolver as BaseAssemblyResolver)?.AddSearchDirectory(Path.GetDirectoryName(InputPath));
-                    DependencyDirs.Add(Path.GetDirectoryName(InputPath));
-                    Module = _ReadModule(InputPath, GenReaderParameters(true, InputPath));
-                }
+        public virtual void Read()
+        {
+            if (_module != null) 
+                return;
+            
+            if (Input != null) {
+                Log("Reading input stream into module.");
+                Module = _ReadModule(Input, GenReaderParameters(true));
+            } else if (InputPath != null) {
+                Log("Reading input file into module.");
+                (AssemblyResolver as BaseAssemblyResolver)?.AddSearchDirectory(Path.GetDirectoryName(InputPath));
+                DependencyDirs.Add(Path.GetDirectoryName(InputPath));
+                Module = _ReadModule(InputPath, GenReaderParameters(true, InputPath));
+            }
 
-                string modsEnv = Environment.GetEnvironmentVariable("MONOMOD_MODS");
-                if (!string.IsNullOrEmpty(modsEnv)) {
-                    foreach (string path in modsEnv.Split(Path.PathSeparator).Select(path => path.Trim())) {
-                        ReadMod(path);
-                    }
+            string? modsEnv = Environment.GetEnvironmentVariable("MONOMOD_MODS");
+            if (!string.IsNullOrEmpty(modsEnv)) {
+                foreach (string path in modsEnv.Split(Path.PathSeparator).Select(path => path.Trim())) {
+                    ReadMod(path);
                 }
             }
         }
@@ -399,7 +411,7 @@ namespace MonoMod {
         public virtual void MapDependency(ModuleDefinition main, AssemblyNameReference depRef) {
             MapDependency(main, depRef.Name, depRef.FullName, depRef);
         }
-        public virtual void MapDependency(ModuleDefinition main, string name, string fullName = null, AssemblyNameReference depRef = null) {
+        public virtual void MapDependency(ModuleDefinition main, string name, string? fullName = null, AssemblyNameReference? depRef = null) {
             if (!DependencyMap.TryGetValue(main, out List<ModuleDefinition> mapped))
                 DependencyMap[main] = mapped = new List<ModuleDefinition>();
 
@@ -441,7 +453,7 @@ namespace MonoMod {
             if (path == null && depRef != null) {
                 try {
                     dep = AssemblyResolver.Resolve(depRef)?.MainModule;
-                } catch { }
+                } catch { /* ignored */ }
                 if (dep != null)
 #if !CECIL0_9
                     path = dep.FileName;
@@ -486,7 +498,7 @@ namespace MonoMod {
             if (path == null) {
                 try {
                     dep = AssemblyResolver.Resolve(AssemblyNameReference.Parse(fullName ?? name))?.MainModule;
-                } catch { }
+                } catch { /* ignored */ }
                 if (dep != null)
 #if !CECIL0_9
                     path = dep.FileName;
@@ -505,21 +517,19 @@ namespace MonoMod {
 
             LogVerbose($"[MapDependency] {main.Name} -> {dep.Name} (({fullName}), ({name})) loaded");
             mapped.Add(dep);
-            if (fullName == null)
-                fullName = dep.Assembly.FullName;
+            fullName ??= dep.Assembly.FullName;
             DependencyCache[fullName] = dep;
             DependencyCache[name] = dep;
             MapDependencies(dep);
         }
-        public virtual ModuleDefinition DefaultMissingDependencyResolver(MonoModder mod, ModuleDefinition main, string name, string fullName) {
+        public virtual ModuleDefinition? DefaultMissingDependencyResolver(MonoModder mod, ModuleDefinition main, string name, string fullName) {
             if (MissingDependencyThrow && Environment.GetEnvironmentVariable("MONOMOD_DEPENDENCY_MISSING_THROW") == "0") {
                 Log("[MissingDependencyResolver] [WARNING] Use MMILRT.Modder.MissingDependencyThrow instead of setting the env var MONOMOD_DEPENDENCY_MISSING_THROW");
                 MissingDependencyThrow = false;
             }
-            if (MissingDependencyThrow ||
-                Strict
-            )
+            if (MissingDependencyThrow || Strict)
                 throw new RelinkTargetNotFoundException($"MonoMod cannot map dependency {main.Name} -> (({fullName}), ({name})) - not found", main);
+            
             return null;
         }
 
@@ -528,9 +538,9 @@ namespace MonoMod {
         /// </summary>
         /// <param name="output">Output stream. If none given, outputPath or default Output will be used.</param>
         /// <param name="outputPath">Output path. If none given, output or default OutputPath will be used.</param>
-        public virtual void Write(Stream output = null, string outputPath = null) {
-            output = output ?? Output;
-            outputPath = outputPath ?? OutputPath;
+        public virtual void Write(Stream? output = null, string? outputPath = null) {
+            output ??= Output;
+            outputPath ??= OutputPath;
 
             PatchRefsInType(PatchWasHere());
 
@@ -543,21 +553,23 @@ namespace MonoMod {
             }
         }
 
-        public virtual ReaderParameters GenReaderParameters(bool mainModule, string path = null) {
+        public virtual ReaderParameters GenReaderParameters(bool mainModule, string? path = null) {
             ReaderParameters _rp = ReaderParameters;
-            ReaderParameters rp = new ReaderParameters(_rp.ReadingMode);
-            rp.AssemblyResolver = _rp.AssemblyResolver;
-            rp.MetadataResolver = _rp.MetadataResolver;
+            ReaderParameters rp = new ReaderParameters(_rp.ReadingMode)
+            {
+                AssemblyResolver = _rp.AssemblyResolver,
+                MetadataResolver = _rp.MetadataResolver,
 #if !CECIL0_9
-            rp.InMemory = _rp.InMemory;
-            rp.MetadataImporterProvider = _rp.MetadataImporterProvider;
-            rp.ReflectionImporterProvider = _rp.ReflectionImporterProvider;
-            rp.ThrowIfSymbolsAreNotMatching = _rp.ThrowIfSymbolsAreNotMatching;
-            rp.ApplyWindowsRuntimeProjections = _rp.ApplyWindowsRuntimeProjections;
+                InMemory = _rp.InMemory,
+                MetadataImporterProvider = _rp.MetadataImporterProvider,
+                ReflectionImporterProvider = _rp.ReflectionImporterProvider,
+                ThrowIfSymbolsAreNotMatching = _rp.ThrowIfSymbolsAreNotMatching,
+                ApplyWindowsRuntimeProjections = _rp.ApplyWindowsRuntimeProjections,
 #endif
-            rp.SymbolStream = _rp.SymbolStream;
-            rp.SymbolReaderProvider = _rp.SymbolReaderProvider;
-            rp.ReadSymbols = _rp.ReadSymbols;
+                SymbolStream = _rp.SymbolStream,
+                SymbolReaderProvider = _rp.SymbolReaderProvider,
+                ReadSymbols = _rp.ReadSymbols,
+            };
 
             if (path != null && !File.Exists(path + ".mdb") && !File.Exists(Path.ChangeExtension(path, "pdb")))
                 rp.ReadSymbols = false;
@@ -604,7 +616,7 @@ namespace MonoMod {
             TypeDefinition rulesType = mod.GetType("MonoMod.MonoModRules");
             Type rulesTypeMMILRT = null;
             if (rulesType != null) {
-                rulesTypeMMILRT = MonoModRulesManager.ExecuteRules(this, rulesType);
+                rulesTypeMMILRT = this.ExecuteRules(rulesType);
                 // Finally, remove the type, otherwise it'll easily conflict with other mods' rules.
                 mod.Types.Remove(rulesType);
             }
@@ -614,29 +626,51 @@ namespace MonoMod {
                 ParseRulesInType(type, rulesTypeMMILRT);
         }
 
-        public virtual void ParseRulesInType(TypeDefinition type, Type rulesTypeMMILRT = null) {
-            string typeName = type.GetPatchFullName();
-
+        public virtual void ParseRulesInType(TypeDefinition type, Type? rulesTypeMMILRT = null) {
             if (!MatchingConditionals(type, Module))
                 return;
 
-            CustomAttribute handler;
+            void ThrowIfNullRulesType() {
+                if (rulesTypeMMILRT is null) {
+                    throw new ArgumentException
+                    (
+                        "This argument cannot be null if the type contains custom attributes",
+                        nameof(rulesTypeMMILRT)
+                    );
+                }
+            }
+            
+            CustomAttribute handler = type.GetCustomAttribute("MonoMod.MonoModCustomAttributeAttribute");
+            if (handler != null) { 
+                ThrowIfNullRulesType();
+                
+                var handlerM = (string) handler.ConstructorArguments[0].Value;
+                System.Reflection.MethodInfo method = rulesTypeMMILRT!.GetMethod(handlerM);
 
-            handler = type.GetCustomAttribute("MonoMod.MonoModCustomAttributeAttribute");
-            if (handler != null) {
-                System.Reflection.MethodInfo method = rulesTypeMMILRT.GetMethod((string) handler.ConstructorArguments[0].Value);
+                if (method is null)
+                    throw new MissingMemberException(rulesTypeMMILRT.FullName, handlerM);
+                
                 CustomAttributeHandlers[type.FullName] = (self, args) => method.Invoke(self, args);
             }
 
             handler = type.GetCustomAttribute("MonoMod.MonoModCustomMethodAttributeAttribute");
             if (handler != null) {
-                System.Reflection.MethodInfo method = rulesTypeMMILRT.GetMethod((string) handler.ConstructorArguments[0].Value);
+                ThrowIfNullRulesType();
+
+                var handlerM = (string) handler.ConstructorArguments[0].Value;
+                System.Reflection.MethodInfo method = rulesTypeMMILRT!.GetMethod(handlerM);
+
+                if (method is null)
+                    throw new MissingMemberException(rulesTypeMMILRT.FullName, handlerM);
+                
                 System.Reflection.ParameterInfo[] argInfos = method.GetParameters();
                 if (argInfos.Length == 2 && argInfos[0].ParameterType.IsCompatible(typeof(ILContext))) {
                     CustomMethodAttributeHandlers[type.FullName] = (self, args) => {
                         ILContext il = new ILContext((MethodDefinition) args[0]);
                         il.Invoke(_ => {
-                            method.Invoke(self, new object[] {
+                            method.Invoke(self, new[] {
+                                // We're immediately invoking it
+                                // ReSharper disable once AccessToDisposedClosure
                                 il,
                                 args[1]
                             });
@@ -649,7 +683,7 @@ namespace MonoMod {
                 }
             }
 
-            CustomAttribute hook;
+            CustomAttribute? hook;
 
             for (hook = type.GetCustomAttribute("MonoMod.MonoModHook"); hook != null; hook = type.GetNextCustomAttribute("MonoMod.MonoModHook"))
                 ParseLinkFrom(type, hook);
@@ -661,10 +695,8 @@ namespace MonoMod {
             if (type.HasCustomAttribute("MonoMod.MonoModIgnore"))
                 return;
 
-            foreach (MethodDefinition method in type.Methods) {
-                if (!MatchingConditionals(method, Module))
-                    continue;
-
+            foreach (MethodDefinition method in type.Methods.Where(method => MatchingConditionals(method, Module)))
+            {
                 for (hook = method.GetCustomAttribute("MonoMod.MonoModHook"); hook != null; hook = method.GetNextCustomAttribute("MonoMod.MonoModHook"))
                     ParseLinkFrom(method, hook);
                 for (hook = method.GetCustomAttribute("MonoMod.MonoModLinkFrom"); hook != null; hook = method.GetNextCustomAttribute("MonoMod.MonoModLinkFrom"))
@@ -678,10 +710,8 @@ namespace MonoMod {
                     ForceCallMap[method.GetID()] = OpCodes.Callvirt;
             }
 
-            foreach (FieldDefinition field in type.Fields) {
-                if (!MatchingConditionals(field, Module))
-                    continue;
-
+            foreach (FieldDefinition field in type.Fields.Where(field => MatchingConditionals(field, Module)))
+            {
                 for (hook = field.GetCustomAttribute("MonoMod.MonoModHook"); hook != null; hook = field.GetNextCustomAttribute("MonoMod.MonoModHook"))
                     ParseLinkFrom(field, hook);
                 for (hook = field.GetCustomAttribute("MonoMod.MonoModLinkFrom"); hook != null; hook = field.GetNextCustomAttribute("MonoMod.MonoModLinkFrom"))
@@ -690,10 +720,8 @@ namespace MonoMod {
                     ParseLinkTo(field, hook);
             }
 
-            foreach (PropertyDefinition prop in type.Properties) {
-                if (!MatchingConditionals(prop, Module))
-                    continue;
-
+            foreach (PropertyDefinition prop in type.Properties.Where(prop => MatchingConditionals(prop, Module)))
+            {
                 for (hook = prop.GetCustomAttribute("MonoMod.MonoModHook"); hook != null; hook = prop.GetNextCustomAttribute("MonoMod.MonoModHook"))
                     ParseLinkFrom(prop, hook);
                 for (hook = prop.GetCustomAttribute("MonoMod.MonoModLinkFrom"); hook != null; hook = prop.GetNextCustomAttribute("MonoMod.MonoModLinkFrom"))
@@ -710,22 +738,22 @@ namespace MonoMod {
             string from = (string) hook.ConstructorArguments[0].Value;
 
             object to;
-            if (target is TypeReference)
-                to = ((TypeReference) target).GetPatchFullName();
-            else if (target is MethodReference)
+            if (target is TypeReference tr)
+                to = tr.GetPatchFullName();
+            else if (target is MethodReference mr)
                 to = new RelinkMapEntry(
-                    ((MethodReference) target).DeclaringType.GetPatchFullName(),
-                    ((MethodReference) target).GetID(withType: false)
+                    mr.DeclaringType.GetPatchFullName(),
+                    mr.GetID(withType: false)
                 );
-            else if (target is FieldReference)
+            else if (target is FieldReference fr)
                 to = new RelinkMapEntry(
-                    ((FieldReference) target).DeclaringType.GetPatchFullName(),
-                    ((FieldReference) target).Name
+                    fr.DeclaringType.GetPatchFullName(),
+                    fr.Name
                 );
-            else if (target is PropertyReference)
+            else if (target is PropertyReference pr)
                 to = new RelinkMapEntry(
-                    ((PropertyReference) target).DeclaringType.GetPatchFullName(),
-                    ((PropertyReference) target).Name
+                    pr.DeclaringType.GetPatchFullName(),
+                    pr.Name
                 );
             else
                 return;
@@ -749,7 +777,7 @@ namespace MonoMod {
                 return;
 
             foreach (CustomAttribute attrib in cap.CustomAttributes.ToArray()) {
-                if (CustomAttributeHandlers.TryGetValue(attrib.AttributeType.FullName, out Action<object, object[]> handler))
+                if (CustomAttributeHandlers.TryGetValue(attrib.AttributeType.FullName, out Action<object?, object[]> handler))
                     handler?.Invoke(null, new object[] { cap, attrib });
                 if (cap is MethodReference && CustomMethodAttributeHandlers.TryGetValue(attrib.AttributeType.FullName, out handler))
                     handler?.Invoke(null, new object[] { (MethodDefinition) cap, attrib });
@@ -789,12 +817,13 @@ namespace MonoMod {
             Log("[AutoPatch] PatchRefs pass");
             PatchRefs();
 
-            if (PostProcessors != null) {
-                Delegate[] pps = PostProcessors.GetInvocationList();
-                for (int i = 0; i < pps.Length; i++) {
-                    Log($"[PostProcessor] PostProcessor pass #{i + 1}");
-                    ((PostProcessor) pps[i])?.Invoke(this);
-                }
+            if (PostProcessors == null) 
+                return;
+            
+            Delegate[] pps = PostProcessors.GetInvocationList();
+            for (int i = 0; i < pps.Length; i++) {
+                Log($"[PostProcessor] PostProcessor pass #{i + 1}");
+                ((PostProcessor) pps[i]).Invoke(this);
             }
         }
 
@@ -812,7 +841,7 @@ namespace MonoMod {
                 throw new RelinkFailedException(null, e, mtp, context);
             }
         }
-        public virtual IMetadataTokenProvider MainRelinker(IMetadataTokenProvider mtp, IGenericParameterProvider context) {
+        public virtual IMetadataTokenProvider? MainRelinker(IMetadataTokenProvider mtp, IGenericParameterProvider context) {
              if (mtp is TypeReference type) {
                 // Type is coming from the input module - return the original.
                 if (type.Module == Module)
@@ -834,7 +863,7 @@ namespace MonoMod {
                 return Module.ImportReference(found);
             }
 
-            if (mtp is FieldReference || mtp is MethodReference || mtp is PropertyReference || mtp is EventReference)
+            if (mtp is FieldReference or MethodReference or PropertyReference or EventReference)
                 // Don't relink those. It'd be useful to f.e. link to member B instead of member A.
                 // MonoModExt already handles the default "deep" relinking.
                 return Module.ImportReference(mtp);
@@ -846,20 +875,23 @@ namespace MonoMod {
             return ResolveRelinkTarget(mtp) ?? mtp;
         }
 
-        public virtual IMetadataTokenProvider ResolveRelinkTarget(IMetadataTokenProvider mtp, bool relink = true, bool relinkModule = true) {
+        public virtual IMetadataTokenProvider? ResolveRelinkTarget(IMetadataTokenProvider mtp, bool relink = true, bool relinkModule = true) {
+            Contract.Assert(Module is not null);
+            
             string name;
             string nameAlt = null;
-            if (mtp is TypeReference) {
-                name = ((TypeReference) mtp).FullName;
-            } else if (mtp is MethodReference) {
-                name = ((MethodReference) mtp).GetID(withType: true);
-                nameAlt = ((MethodReference) mtp).GetID(simple: true);
-            } else if (mtp is FieldReference) {
-                name = ((FieldReference) mtp).FullName;
-            } else if (mtp is PropertyReference) {
-                name = ((PropertyReference) mtp).FullName;
-            } else
+            if (mtp is TypeReference reference1) {
+                name = reference1.FullName;
+            } else if (mtp is MethodReference mr) {
+                name = mr.GetID(withType: true);
+                nameAlt = mr.GetID(simple: true);
+            } else if (mtp is FieldReference fr) {
+                name = fr.FullName;
+            } else if (mtp is PropertyReference pr) {
+                name = pr.FullName;
+            } else {
                 return null;
+            }
 
             if (RelinkMapCache.TryGetValue(name, out IMetadataTokenProvider cached))
                 return cached;
@@ -869,34 +901,34 @@ namespace MonoMod {
                 (nameAlt != null && RelinkMap.TryGetValue(nameAlt, out val))
             )) {
                 // If the value already is a mtp, import and cache the imported reference.
-                if (val is IMetadataTokenProvider)
-                    return RelinkMapCache[name] = Module.ImportReference((IMetadataTokenProvider) val);
+                if (val is IMetadataTokenProvider provider)
+                    return RelinkMapCache[name] = Module.ImportReference(provider);
 
-                if (val is RelinkMapEntry) {
-                    string typeName = ((RelinkMapEntry) val).Type as string;
-                    string findableID = ((RelinkMapEntry) val).FindableID as string;
+                if (val is RelinkMapEntry entry) {
+                    string typeName = entry.Type;
+                    string findableID = entry.FindableID;
 
                     TypeDefinition type = FindTypeDeep(typeName)?.SafeResolve();
                     if (type == null)
                         return RelinkMapCache[name] = ResolveRelinkTarget(mtp, false, relinkModule);
 
                     val =
-                        type.FindMethod(findableID) ??
-                        type.FindField(findableID) ??
-                        type.FindProperty(findableID) ??
-                        (object) null
+                        (object) type.FindMethod(findableID) ??
+                        (object) type.FindField(findableID) ??
+                        (object) type.FindProperty(findableID)
                     ;
-                    if (val == null) {
-                        if (Strict)
-                            throw new RelinkTargetNotFoundException($"{RelinkTargetNotFoundException.DefaultMessage} ({typeName}, {findableID}) (remap: {mtp})", mtp);
-                        else
-                            return null;
-                    }
-                    return RelinkMapCache[name] = Module.ImportReference((IMetadataTokenProvider) val);
+                    
+                    if (val != null) 
+                        return RelinkMapCache[name] = Module.ImportReference((IMetadataTokenProvider) val);
+                    
+                    if (Strict)
+                        throw new RelinkTargetNotFoundException($"{RelinkTargetNotFoundException.DefaultMessage} ({typeName}, {findableID}) (remap: {mtp})", mtp);
+                    else
+                        return null;
                 }
 
-                if (val is string && mtp is TypeReference) {
-                    IMetadataTokenProvider found = FindTypeDeep((string) val);
+                if (val is string str && mtp is TypeReference) {
+                    IMetadataTokenProvider found = FindTypeDeep(str);
                     if (found == null) {
                         if (Strict)
                             throw new RelinkTargetNotFoundException($"{RelinkTargetNotFoundException.DefaultMessage} {val} (remap: {mtp})", mtp);
@@ -908,23 +940,23 @@ namespace MonoMod {
                     );
                 }
 
-                if (val is IMetadataTokenProvider)
-                    return RelinkMapCache[name] = (IMetadataTokenProvider) val;
+                if (val is IMetadataTokenProvider imtp)
+                    return RelinkMapCache[name] = imtp;
 
                 throw new InvalidOperationException($"MonoMod doesn't support RelinkMap value of type {val.GetType()} (remap: {mtp})");
             }
 
 
-            if (relinkModule && mtp is TypeReference) {
+            if (relinkModule && mtp is TypeReference tref) {
                 if (RelinkModuleMapCache.TryGetValue(name, out TypeReference type))
                     return type;
-                type = (TypeReference) mtp;
+                type = tref;
 
                 if (RelinkModuleMap.TryGetValue(type.Scope.Name, out ModuleDefinition scope)) {
                     TypeReference found = scope.GetType(type.FullName);
                     if (found == null) {
                         if (Strict)
-                            throw new RelinkTargetNotFoundException($"{RelinkTargetNotFoundException.DefaultMessage} {type.FullName} (remap: {mtp})", mtp);
+                            throw new RelinkTargetNotFoundException($"{RelinkTargetNotFoundException.DefaultMessage} {type.FullName} (remap: {mtp})", tref);
                         else
                             return null;
                     }
@@ -945,11 +977,11 @@ namespace MonoMod {
         }
 
 
-        public virtual TypeReference FindType(string name)
+        public virtual TypeReference? FindType(string name)
             => FindType(Module, name, new Stack<ModuleDefinition>()) ?? Module.GetType(name, false);
-        public virtual TypeReference FindType(string name, bool runtimeName)
+        public virtual TypeReference? FindType(string name, bool runtimeName)
             => FindType(Module, name, new Stack<ModuleDefinition>()) ?? Module.GetType(name, runtimeName);
-        protected virtual TypeReference FindType(ModuleDefinition main, string fullName, Stack<ModuleDefinition> crawled) {
+        protected virtual TypeReference? FindType(ModuleDefinition main, string fullName, Stack<ModuleDefinition> crawled) {
             TypeReference type;
             if ((type = main.GetType(fullName, false)) != null)
                 return type;
@@ -963,23 +995,20 @@ namespace MonoMod {
                     return type;
             return null;
         }
-        public virtual TypeReference FindTypeDeep(string name) {
+        public virtual TypeReference? FindTypeDeep(string name) {
             TypeReference type = FindType(name, false);
             if (type != null)
                 return type;
 
             // Check in the dependencies of the mod modules.
             Stack<ModuleDefinition> crawled = new Stack<ModuleDefinition>();
-            // Set type to null so that an actual break condition exists
-            type = null;
-            foreach (ModuleDefinition mod in Mods)
-                foreach (ModuleDefinition dep in DependencyMap[mod])
-                    if ((type = FindType(dep, name, crawled)) != null) {
-                        // Type may come from a dependency. If the assembly reference is missing, add.
-                        if (type.Scope is AssemblyNameReference dllRef && !Module.AssemblyReferences.Any(n => n.Name == dllRef.Name))
-                            Module.AssemblyReferences.Add(dllRef);
-                        return Module.ImportReference(type);
-                    }
+            foreach (ModuleDefinition dep in Mods.SelectMany(m => DependencyMap[(ModuleDefinition) m]))
+               if ((type = FindType(dep, name, crawled)) != null) {
+                   // Type may come from a dependency. If the assembly reference is missing, add.
+                   if (type.Scope is AssemblyNameReference dllRef && Module.AssemblyReferences.All(n => n.Name != dllRef.Name))
+                       Module.AssemblyReferences.Add(dllRef);
+                   return Module.ImportReference(type);
+               }
 
             return null;
         }
@@ -993,18 +1022,16 @@ namespace MonoMod {
             foreach (TypeDefinition type in mod.Types)
                 PrePatchType(type);
 
-            foreach (ModuleReference @ref in mod.ModuleReferences)
-                if (!Module.ModuleReferences.Contains(@ref))
-                    Module.ModuleReferences.Add(@ref);
+            foreach (ModuleReference @ref in mod.ModuleReferences.Where(@ref => !Module.ModuleReferences.Contains(@ref)))
+                Module.ModuleReferences.Add(@ref);
 
-            foreach (Resource res in mod.Resources)
-                if (res is EmbeddedResource) 
+            foreach (EmbeddedResource res in mod.Resources.OfType<EmbeddedResource>())
                     Module.Resources.Add(new EmbeddedResource(
                         res.Name.StartsWith(mod.Assembly.Name.Name, StringComparison.Ordinal) ?
                             Module.Assembly.Name.Name + res.Name.Substring(mod.Assembly.Name.Name.Length) :
                             res.Name,
                         res.Attributes,
-                        ((EmbeddedResource) res).GetResourceData()
+                        res.GetResourceData()
                     ));
         }
 
@@ -1054,7 +1081,7 @@ namespace MonoMod {
             newType.ClassSize = type.ClassSize;
             if (type.DeclaringType != null) {
                 // The declaring type is existing as this is being called nestedly.
-                newType.DeclaringType = type.DeclaringType.Relink(Relinker, newType).Resolve();
+                newType.DeclaringType = type.DeclaringType.Relink(Relinker, newType)!.Resolve();
                 newType.DeclaringType.NestedTypes.Add(newType);
             } else {
                 Module.Types.Add(newType);
@@ -1065,14 +1092,12 @@ namespace MonoMod {
             // When adding MonoModAdded, try to reuse the just added MonoModAdded.
             newType.CustomAttributes.Add(new CustomAttribute(GetMonoModAddedCtor()));
 
-            targetType = newType;
-            
             PrePatchNested(type);
         }
 
-        protected virtual void PrePatchNested(TypeDefinition type) {
-            for (int i = 0; i < type.NestedTypes.Count; i++) {
-                PrePatchType(type.NestedTypes[i]);
+        protected virtual void PrePatchNested(TypeDefinition type) { 
+            foreach (TypeDefinition t in type.NestedTypes) {
+                PrePatchType(t);
             }
         }
 #endregion
@@ -1107,7 +1132,7 @@ namespace MonoMod {
 
             TypeReference targetType = Module.GetType(typeName, false);
             if (targetType == null) return; // Type should've been added or removed accordingly.
-            TypeDefinition targetTypeDef = targetType?.SafeResolve();
+            TypeDefinition targetTypeDef = targetType.Resolve();
 
             if ((type.Namespace != "MonoMod" && type.HasCustomAttribute("MonoMod.MonoModIgnore")) || // Fix legacy issue: Copy / inline any used modifiers.
                 SkipList.Contains(typeName) ||
@@ -1124,10 +1149,12 @@ namespace MonoMod {
                 return;
             }
 
-            if (typeName == type.FullName)
-                LogVerbose($"[PatchType] Patching type {typeName}");
-            else
-                LogVerbose($"[PatchType] Patching type {typeName} (prefixed: {type.FullName})");
+            LogVerbose
+            (
+                typeName == type.FullName
+                    ? $"[PatchType] Patching type {typeName}"
+                    : $"[PatchType] Patching type {typeName} (prefixed: {type.FullName})"
+            );
 
             // Add "new" custom attributes
             foreach (CustomAttribute attrib in type.CustomAttributes)
@@ -1164,12 +1191,12 @@ namespace MonoMod {
         }
 
         protected virtual void PatchNested(TypeDefinition type) {
-            for (int i = 0; i < type.NestedTypes.Count; i++) {
-                PatchType(type.NestedTypes[i]);
+            foreach (TypeDefinition t in type.NestedTypes) {
+                PatchType(t);
             }
         }
 
-        public virtual void PatchProperty(TypeDefinition targetType, PropertyDefinition prop, HashSet<MethodDefinition> propMethods = null) {
+        public virtual void PatchProperty(TypeDefinition targetType, PropertyDefinition prop, HashSet<MethodDefinition>? propMethods = null) {
             if (!MatchingConditionals(prop, Module))
                 return;
 
@@ -1227,8 +1254,8 @@ namespace MonoMod {
                 targetType.Properties.Add(newProp);
 
                 if (backing != null) {
-                    FieldDefinition newBacking = targetBacking = new FieldDefinition(backingName, backing.Attributes, backing.FieldType);
-                    targetType.Fields.Add(newBacking);
+                    targetBacking = new FieldDefinition(backingName, backing.Attributes, backing.FieldType);
+                    targetType.Fields.Add(targetBacking);
                 }
             }
 
@@ -1256,7 +1283,7 @@ namespace MonoMod {
                 }
         }
 
-        public virtual void PatchEvent(TypeDefinition targetType, EventDefinition srcEvent, HashSet<MethodDefinition> propMethods = null) {
+        public virtual void PatchEvent(TypeDefinition targetType, EventDefinition srcEvent, HashSet<MethodDefinition>? propMethods = null) {
             srcEvent.Name = srcEvent.GetPatchName();
 
             MethodDefinition patched;
@@ -1388,7 +1415,7 @@ namespace MonoMod {
                 existingField.CustomAttributes.Add(attrib.Clone());
         }
 
-        public virtual MethodDefinition PatchMethod(TypeDefinition targetType, MethodDefinition method) {
+        public virtual MethodDefinition? PatchMethod(TypeDefinition targetType, MethodDefinition method) {
             if (method.Name.StartsWith("orig_", StringComparison.Ordinal) || method.HasCustomAttribute("MonoMod.MonoModOriginal"))
                 // Ignore original method stubs
                 return null;
@@ -1496,19 +1523,20 @@ namespace MonoMod {
                 method = existingMethod;
 
             } else {
-                MethodDefinition clone = new MethodDefinition(method.Name, method.Attributes, Module.TypeSystem.Void);
-                clone.MetadataToken = GetMetadataToken(TokenType.Method);
-                clone.CallingConvention = method.CallingConvention;
-                clone.ExplicitThis = method.ExplicitThis;
-                clone.MethodReturnType = method.MethodReturnType;
-                clone.Attributes = method.Attributes;
-                clone.ImplAttributes = method.ImplAttributes;
-                clone.SemanticsAttributes = method.SemanticsAttributes;
-                clone.DeclaringType = targetType;
-                clone.ReturnType = method.ReturnType;
+                MethodDefinition clone = new MethodDefinition(method.Name, method.Attributes, Module.TypeSystem.Void) {
+                    MetadataToken = GetMetadataToken(TokenType.Method),
+                    CallingConvention = method.CallingConvention,
+                    ExplicitThis = method.ExplicitThis,
+                    MethodReturnType = method.MethodReturnType,
+                    Attributes = method.Attributes,
+                    ImplAttributes = method.ImplAttributes,
+                    SemanticsAttributes = method.SemanticsAttributes,
+                    DeclaringType = targetType,
+                    ReturnType = method.ReturnType,
+                    PInvokeInfo = method.PInvokeInfo,
+                    IsPInvokeImpl = method.IsPInvokeImpl
+                };
                 clone.Body = method.Body.Clone(clone);
-                clone.PInvokeInfo = method.PInvokeInfo;
-                clone.IsPInvokeImpl = method.IsPInvokeImpl;
 
                 foreach (GenericParameter genParam in method.GenericParameters)
                     clone.GenericParameters.Add(genParam.Clone());
@@ -1541,19 +1569,16 @@ namespace MonoMod {
 
 #region PatchRefs Pass
         public virtual void PatchRefs() {
-            if (UpgradeMSCORLIB == null) {
+            if (UpgradeMscorlib is not bool upgrade) {
                 // Check if the assembly depends on mscorlib 2.0.5.0, possibly Unity.
                 // If so, upgrade to that version (or away to an even higher version).
                 Version fckUnity = new Version(2, 0, 5, 0);
-                UpgradeMSCORLIB = Module.AssemblyReferences.Any(x => x.Version == fckUnity);
-            }
-
-            if (UpgradeMSCORLIB.Value) {
+                UpgradeMscorlib = Module.AssemblyReferences.Any(x => x.Version == fckUnity);
+            } else if (upgrade) {
                 // Attempt to remap and remove redundant mscorlib references.
                 // Subpass 1: Find newest referred version.
                 List<AssemblyNameReference> mscorlibDeps = new List<AssemblyNameReference>();
-                for (int i = 0; i < Module.AssemblyReferences.Count; i++) {
-                    AssemblyNameReference dep = Module.AssemblyReferences[i];
+                foreach (AssemblyNameReference dep in Module.AssemblyReferences) {
                     if (dep.Name == "mscorlib") {
                         mscorlibDeps.Add(dep);
                     }
@@ -1591,10 +1616,11 @@ namespace MonoMod {
                 type.BaseType = type.BaseType.Relink(Relinker, type);
 
             // Don't foreach when modifying the collection
-            for (int i = 0; i < type.GenericParameters.Count; i++) {
+            for (int i = 0; i < type.GenericParameters.Count; i++)
+            {
                 type.GenericParameters[i] = type.GenericParameters[i].Relink(Relinker, type);
-                for (int j = 0; j < type.GenericParameters[i].CustomAttributes.Count; j++)
-                    PatchRefsInCustomAttribute(type.GenericParameters[i].CustomAttributes[j]);
+                foreach (CustomAttribute attr in type.GenericParameters[i].CustomAttributes)
+                    PatchRefsInCustomAttribute(attr);
             }
 
             // Don't foreach when modifying the collection
@@ -1639,8 +1665,8 @@ namespace MonoMod {
                     field.CustomAttributes[i] = field.CustomAttributes[i].Relink(Relinker, type);
             }
 
-            for (int i = 0; i < type.NestedTypes.Count; i++)
-                PatchRefsInType(type.NestedTypes[i]);
+            foreach (TypeDefinition t in type.NestedTypes)
+                PatchRefsInType(t);
         }
 
         public virtual void PatchRefsInMethod(MethodDefinition method) {
@@ -1692,20 +1718,20 @@ namespace MonoMod {
 
                 // Before relinking, check for an existing forced call opcode mapping.
                 OpCode forceCall = default;
-                bool hasForceCall = operand is MethodReference && (
-                    ForceCallMap.TryGetValue((operand as MethodReference).GetID(), out forceCall) ||
-                    ForceCallMap.TryGetValue((operand as MethodReference).GetID(simple: true), out forceCall)
+                bool hasForceCall = operand is MethodReference preRelink && (
+                    ForceCallMap.TryGetValue(preRelink.GetID(), out forceCall) ||
+                    ForceCallMap.TryGetValue(preRelink.GetID(simple: true), out forceCall)
                 );
 
                 // General relinking
-                if (!(operand is ParameterDefinition) && operand is IMetadataTokenProvider)
-                    operand = ((IMetadataTokenProvider) operand).Relink(Relinker, method);
+                if (operand is not ParameterDefinition && operand is IMetadataTokenProvider mtp)
+                    operand = mtp.Relink(Relinker, method);
 
                 // Check again after relinking.
-                if (!hasForceCall && operand is MethodReference) {
+                if (!hasForceCall && operand is MethodReference mi) {
                     bool hasForceCallRelinked =
-                        ForceCallMap.TryGetValue((operand as MethodReference).GetID(), out OpCode forceCallRelinked) ||
-                        ForceCallMap.TryGetValue((operand as MethodReference).GetID(simple: true), out forceCallRelinked)
+                        ForceCallMap.TryGetValue(mi.GetID(), out OpCode forceCallRelinked) ||
+                        ForceCallMap.TryGetValue(mi.GetID(simple: true), out forceCallRelinked)
                     ;
                     // If a relinked force call exists, prefer it over the existing forced call opcode.
                     // Otherwise keep the existing forced call opcode.
@@ -1716,23 +1742,19 @@ namespace MonoMod {
                 }
 
                 // patch_ constructor fix: If referring to itself, refer to the original constructor.
-                if (instr.OpCode == OpCodes.Call && operand is MethodReference &&
-                    (((MethodReference) operand).Name == ".ctor" ||
-                     ((MethodReference) operand).Name == ".cctor") &&
-                    ((MethodReference) operand).FullName == method.FullName) {
+                if (instr.OpCode == OpCodes.Call && operand is MethodReference { Name: ".ctor" or ".cctor" } ctorRef &&
+                    ctorRef.FullName == method.FullName) {
                     // ((MethodReference) operand).Name = method.GetOriginalName();
                     // Above could be enough, but what about the metadata token?
                     operand = method.DeclaringType.FindMethod(method.GetID(name: method.GetOriginalName()));
                 }
 
                 // .ctor -> static method reference fix: newobj -> call
-                if ((instr.OpCode == OpCodes.Newobj || instr.OpCode == OpCodes.Newarr) && operand is MethodReference &&
-                    ((MethodReference) operand).Name != ".ctor") {
-                    instr.OpCode = ((MethodReference) operand).IsCallvirt() ? OpCodes.Callvirt : OpCodes.Call;
-
+                if ((instr.OpCode == OpCodes.Newobj || instr.OpCode == OpCodes.Newarr) && operand is MethodReference { Name: not ".ctor" } mref) {
+                    instr.OpCode = mref.IsCallvirt() ? OpCodes.Callvirt : OpCodes.Call;
                 // field -> property reference fix: ld(s)fld(a) / st(s)fld(a) <-> call get / set
-                } else if ((instr.OpCode == OpCodes.Ldfld || instr.OpCode == OpCodes.Ldflda || instr.OpCode == OpCodes.Stfld || instr.OpCode == OpCodes.Ldsfld || instr.OpCode == OpCodes.Ldsflda || instr.OpCode == OpCodes.Stsfld) && operand is PropertyReference) {
-                    PropertyDefinition prop = ((PropertyReference) operand).Resolve();
+                } else if ((instr.OpCode == OpCodes.Ldfld || instr.OpCode == OpCodes.Ldflda || instr.OpCode == OpCodes.Stfld || instr.OpCode == OpCodes.Ldsfld || instr.OpCode == OpCodes.Ldsflda || instr.OpCode == OpCodes.Stsfld) && operand is PropertyReference pi) {
+                    PropertyDefinition prop = pi.Resolve();
                     if (instr.OpCode == OpCodes.Ldfld || instr.OpCode == OpCodes.Ldflda || instr.OpCode == OpCodes.Ldsfld || instr.OpCode == OpCodes.Ldsflda)
                         operand = prop.GetMethod;
                     else {
@@ -1743,14 +1765,18 @@ namespace MonoMod {
                     instr.OpCode = ((MethodReference) operand).IsCallvirt() ? OpCodes.Callvirt : OpCodes.Call;
 
                 // field <-> method reference fix: ld(s)fld / st(s)fld <-> call
-                } else if ((instr.OpCode == OpCodes.Ldfld || instr.OpCode == OpCodes.Ldflda || instr.OpCode == OpCodes.Stfld) && operand is MethodReference) {
-                    if (instr.OpCode == OpCodes.Ldflda)
+                } else if ((instr.OpCode == OpCodes.Ldfld || instr.OpCode == OpCodes.Ldflda || instr.OpCode == OpCodes.Stfld) && operand is MethodReference replacement) {
+                    if (instr.OpCode == OpCodes.Ldflda) {
+                        // ReSharper disable once PossibleInvalidCastException
                         body.AppendGetAddr(instr, ((PropertyReference) operand).PropertyType, tmpAddrLocMap);
-                    instr.OpCode = ((MethodReference) operand).IsCallvirt() ? OpCodes.Callvirt : OpCodes.Call;
+                    }
+                    instr.OpCode = replacement.IsCallvirt() ? OpCodes.Callvirt : OpCodes.Call;
 
                 } else if ((instr.OpCode == OpCodes.Ldsfld || instr.OpCode == OpCodes.Ldsflda || instr.OpCode == OpCodes.Stsfld) && operand is MethodReference) {
-                    if (instr.OpCode == OpCodes.Ldsflda)
+                    if (instr.OpCode == OpCodes.Ldsflda) {
+                        // ReSharper disable once PossibleInvalidCastException
                         body.AppendGetAddr(instr, ((PropertyReference) operand).PropertyType, tmpAddrLocMap);
+                    }
                     instr.OpCode = OpCodes.Call;
 
                 } else if ((instr.OpCode == OpCodes.Callvirt || instr.OpCode == OpCodes.Call) && operand is FieldReference) {
@@ -1767,17 +1793,17 @@ namespace MonoMod {
                 }
 
                 // "general" static method <-> virtual method reference fix: call <-> callvirt
-                else if ((instr.OpCode == OpCodes.Call || instr.OpCode == OpCodes.Callvirt) && operand is MethodReference) {
+                else if ((instr.OpCode == OpCodes.Call || instr.OpCode == OpCodes.Callvirt) && operand is MethodReference call) {
                     if (hasForceCall) {
                         instr.OpCode = forceCall;
-                    } else if (!body.IsBaseMethodCall(operand as MethodReference)) {
-                        instr.OpCode = ((MethodReference) operand).IsCallvirt() ? OpCodes.Callvirt : OpCodes.Call;
+                    } else if (!body.IsBaseMethodCall(call)) {
+                        instr.OpCode = call.IsCallvirt() ? OpCodes.Callvirt : OpCodes.Call;
                     }
                 }
 
                 // Reference importing
-                if (operand is IMetadataTokenProvider)
-                    operand = method.Module.ImportReference((IMetadataTokenProvider) operand);
+                if (operand is IMetadataTokenProvider provider)
+                    operand = method.Module.ImportReference(provider);
 
                 instr.Operand = operand;
 
@@ -1842,8 +1868,8 @@ namespace MonoMod {
             for (int i = attribs.Count - 1; i > -1; --i) {
                 TypeReference attribType = attribs[i].AttributeType;
                 if (ShouldCleanupAttrib?.Invoke(cap, attribType) ?? (
-                    (attribType.Scope.Name == "MonoMod" || attribType.Scope.Name == "MonoMod.exe" || attribType.Scope.Name == "MonoMod.dll") ||
-                    (attribType.FullName.StartsWith("MonoMod.MonoMod", StringComparison.Ordinal))
+                    attribType.Scope.Name is "MonoMod" or "MonoMod.exe" or "MonoMod.dll" ||
+                    attribType.FullName.StartsWith("MonoMod.MonoMod", StringComparison.Ordinal)
                 )) {
                     attribs.RemoveAt(i);
                 }
@@ -1921,10 +1947,12 @@ namespace MonoMod {
 
 #region MonoMod injected types
         public virtual TypeDefinition PatchWasHere() {
-            for (int ti = 0; ti < Module.Types.Count; ti++) {
-                if (Module.Types[ti].Namespace == "MonoMod" && Module.Types[ti].Name == "WasHere") {
+            Contract.Assert(Module is not null);
+            
+            foreach (TypeDefinition def in Module.Types) {
+                if (def.Namespace == "MonoMod" && def.Name == "WasHere") {
                     LogVerbose("[PatchWasHere] Type MonoMod.WasHere already existing");
-                    return Module.Types[ti];
+                    return def;
                 }
             }
             LogVerbose("[PatchWasHere] Adding type MonoMod.WasHere");
@@ -1935,7 +1963,7 @@ namespace MonoMod {
             return wasHere;
         }
 
-        protected MethodDefinition _mmOriginalCtor;
+        protected MethodDefinition? _mmOriginalCtor;
         public virtual MethodReference GetMonoModOriginalCtor() {
             if (_mmOriginalCtor != null && _mmOriginalCtor.Module != Module) {
                 _mmOriginalCtor = null;
@@ -1944,26 +1972,24 @@ namespace MonoMod {
                 return _mmOriginalCtor;
             }
 
-            TypeDefinition attrType = null;
-            for (int ti = 0; ti < Module.Types.Count; ti++) {
-                if (Module.Types[ti].Namespace == "MonoMod" && Module.Types[ti].Name == "MonoModOriginal") {
-                    attrType = Module.Types[ti];
-                    for (int mi = 0; mi < attrType.Methods.Count; mi++) {
-                        if (!attrType.Methods[mi].IsConstructor || attrType.Methods[mi].IsStatic) {
+            TypeDefinition? attrType = null;
+            foreach (TypeDefinition ti in Module.Types) {
+                if (ti.Namespace == "MonoMod" && ti.Name == "MonoModOriginal") {
+                    attrType = ti;
+                    foreach (MethodDefinition mi in attrType.Methods) {
+                        if (!mi.IsConstructor || mi.IsStatic) {
                             continue;
                         }
-                        return _mmOriginalCtor = attrType.Methods[mi];
+                        return _mmOriginalCtor = mi;
                     }
                 }
             }
             LogVerbose("[MonoModOriginal] Adding MonoMod.MonoModOriginal");
             TypeReference tr_Attribute = FindType("System.Attribute");
-            if (tr_Attribute != null) {
-                tr_Attribute = Module.ImportReference(tr_Attribute);
-            } else {
-                tr_Attribute = Module.ImportReference(typeof(Attribute));
-            }
-            attrType = attrType ?? new TypeDefinition("MonoMod", "MonoModOriginal", TypeAttributes.Public | TypeAttributes.Class) {
+            tr_Attribute = tr_Attribute != null 
+                ? Module.ImportReference(tr_Attribute) 
+                : Module.ImportReference(typeof(Attribute));
+            attrType ??= new TypeDefinition("MonoMod", "MonoModOriginal", TypeAttributes.Public | TypeAttributes.Class) {
                 BaseType = tr_Attribute
             };
             _mmOriginalCtor = new MethodDefinition(".ctor",
@@ -1982,7 +2008,7 @@ namespace MonoMod {
             return _mmOriginalCtor;
         }
 
-        protected MethodDefinition _mmOriginalNameCtor;
+        protected MethodDefinition? _mmOriginalNameCtor;
         public virtual MethodReference GetMonoModOriginalNameCtor() {
             if (_mmOriginalNameCtor != null && _mmOriginalNameCtor.Module != Module) {
                 _mmOriginalNameCtor = null;
@@ -1992,25 +2018,18 @@ namespace MonoMod {
             }
 
             TypeDefinition attrType = null;
-            for (int ti = 0; ti < Module.Types.Count; ti++) {
-                if (Module.Types[ti].Namespace == "MonoMod" && Module.Types[ti].Name == "MonoModOriginalName") {
-                    attrType = Module.Types[ti];
-                    for (int mi = 0; mi < attrType.Methods.Count; mi++) {
-                        if (!attrType.Methods[mi].IsConstructor || attrType.Methods[mi].IsStatic) {
-                            continue;
-                        }
-                        return _mmOriginalNameCtor = attrType.Methods[mi];
-                    }
-                }
+            foreach (TypeDefinition ti in Module.Types.Where(ti => ti.Namespace == "MonoMod" && ti.Name == "MonoModOriginalName"))
+            {
+                attrType = ti;
+                foreach (MethodDefinition mi in attrType.Methods.Where(mi => mi.IsConstructor && !mi.IsStatic))
+                    return _mmOriginalNameCtor = mi;
             }
             LogVerbose("[MonoModOriginalName] Adding MonoMod.MonoModOriginalName");
             TypeReference tr_Attribute = FindType("System.Attribute");
-            if (tr_Attribute != null) {
-                tr_Attribute = Module.ImportReference(tr_Attribute);
-            } else {
-                tr_Attribute = Module.ImportReference(typeof(Attribute));
-            }
-            attrType = attrType ?? new TypeDefinition("MonoMod", "MonoModOriginalName", TypeAttributes.Public | TypeAttributes.Class) {
+            tr_Attribute = tr_Attribute != null 
+                ? Module.ImportReference(tr_Attribute) 
+                : Module.ImportReference(typeof(Attribute));
+            attrType ??= new TypeDefinition("MonoMod", "MonoModOriginalName", TypeAttributes.Public | TypeAttributes.Class) {
                 BaseType = tr_Attribute
             };
             _mmOriginalNameCtor = new MethodDefinition(".ctor",
@@ -2030,7 +2049,7 @@ namespace MonoMod {
             return _mmOriginalNameCtor;
         }
 
-        protected MethodDefinition _mmAddedCtor;
+        protected MethodDefinition? _mmAddedCtor;
         public virtual MethodReference GetMonoModAddedCtor() {
             if (_mmAddedCtor != null && _mmAddedCtor.Module != Module) {
                 _mmAddedCtor = null;
@@ -2040,25 +2059,19 @@ namespace MonoMod {
             }
 
             TypeDefinition attrType = null;
-            for (int ti = 0; ti < Module.Types.Count; ti++) {
-                if (Module.Types[ti].Namespace == "MonoMod" && Module.Types[ti].Name == "MonoModAdded") {
-                    attrType = Module.Types[ti];
-                    for (int mi = 0; mi < attrType.Methods.Count; mi++) {
-                        if (!attrType.Methods[mi].IsConstructor || attrType.Methods[mi].IsStatic) {
-                            continue;
-                        }
-                        return _mmAddedCtor = attrType.Methods[mi];
-                    }
+            foreach (TypeDefinition ti in Module.Types.Where(ti => ti.Namespace == "MonoMod" && ti.Name == "MonoModAdded")) {
+                attrType = ti;
+                
+                foreach (MethodDefinition ctor in attrType.Methods.Where(mi => mi.IsConstructor && !mi.IsStatic)) {
+                    return _mmAddedCtor = ctor;
                 }
             }
             LogVerbose("[MonoModAdded] Adding MonoMod.MonoModAdded");
             TypeReference tr_Attribute = FindType("System.Attribute");
-            if (tr_Attribute != null) {
-                tr_Attribute = Module.ImportReference(tr_Attribute);
-            } else {
-                tr_Attribute = Module.ImportReference(typeof(Attribute));
-            }
-            attrType = attrType ?? new TypeDefinition("MonoMod", "MonoModAdded", TypeAttributes.Public | TypeAttributes.Class) {
+            tr_Attribute = tr_Attribute != null
+                ? Module.ImportReference (tr_Attribute)
+                : Module.ImportReference (typeof(Attribute));
+            attrType ??= new TypeDefinition("MonoMod", "MonoModAdded", TypeAttributes.Public | TypeAttributes.Class) {
                 BaseType = tr_Attribute
             };
             _mmAddedCtor = new MethodDefinition(".ctor",
@@ -2077,7 +2090,7 @@ namespace MonoMod {
             return _mmAddedCtor;
         }
 
-        protected MethodDefinition _mmPatchCtor;
+        protected MethodDefinition? _mmPatchCtor;
         public virtual MethodReference GetMonoModPatchCtor() {
             if (_mmPatchCtor != null && _mmPatchCtor.Module != Module) {
                 _mmPatchCtor = null;
@@ -2087,25 +2100,24 @@ namespace MonoMod {
             }
 
             TypeDefinition attrType = null;
-            for (int ti = 0; ti < Module.Types.Count; ti++) {
-                if (Module.Types[ti].Namespace == "MonoMod" && Module.Types[ti].Name == "MonoModPatch") {
-                    attrType = Module.Types[ti];
-                    for (int mi = 0; mi < attrType.Methods.Count; mi++) {
-                        if (!attrType.Methods[mi].IsConstructor || attrType.Methods[mi].IsStatic) {
+            foreach (TypeDefinition ti in Module.Types) {
+                if (ti.Namespace == "MonoMod" && ti.Name == "MonoModPatch")
+                {
+                    attrType = ti;
+                    foreach (MethodDefinition mi in attrType.Methods) {
+                        if (!mi.IsConstructor || mi.IsStatic) {
                             continue;
                         }
-                        return _mmPatchCtor = attrType.Methods[mi];
+                        return _mmPatchCtor = mi;
                     }
                 }
             }
             LogVerbose("[MonoModPatch] Adding MonoMod.MonoModPatch");
             TypeReference tr_Attribute = FindType("System.Attribute");
-            if (tr_Attribute != null) {
-                tr_Attribute = Module.ImportReference(tr_Attribute);
-            } else {
-                tr_Attribute = Module.ImportReference(typeof(Attribute));
-            }
-            attrType = attrType ?? new TypeDefinition("MonoMod", "MonoModPatch", TypeAttributes.Public | TypeAttributes.Class) {
+            tr_Attribute = tr_Attribute != null 
+                ? Module.ImportReference(tr_Attribute) 
+                : Module.ImportReference(typeof(Attribute));
+            attrType ??= new TypeDefinition("MonoMod", "MonoModPatch", TypeAttributes.Public | TypeAttributes.Class) {
                 BaseType = tr_Attribute
             };
             _mmPatchCtor = new MethodDefinition(".ctor",
@@ -2170,7 +2182,7 @@ namespace MonoMod {
         /// <returns><c>true</c> if the special name used in the method is allowed, <c>false</c> otherwise.</returns>
         /// <param name="method">Method to check.</param>
         /// <param name="targetType">Type to which the method will be added.</param>
-        public virtual bool AllowedSpecialName(MethodDefinition method, TypeDefinition targetType = null) {
+        public virtual bool AllowedSpecialName(MethodDefinition method, TypeDefinition? targetType = null) {
             if (method.HasCustomAttribute("MonoMod.MonoModAdded") || method.DeclaringType.HasCustomAttribute("MonoMod.MonoModAdded") ||
                 (targetType?.HasCustomAttribute("MonoMod.MonoModAdded") ?? false)) {
                 return true;
@@ -2199,46 +2211,48 @@ namespace MonoMod {
             return !method.IsRuntimeSpecialName; // Formerly SpecialName. If something breaks, blame UnderRail.
         }
 
-        public virtual bool MatchingConditionals(ICustomAttributeProvider cap, ModuleDefinition module)
+        public virtual bool MatchingConditionals(ICustomAttributeProvider? cap, ModuleDefinition module)
             => MatchingConditionals(cap, module.Assembly.Name);
-        public virtual bool MatchingConditionals(ICustomAttributeProvider cap, AssemblyNameReference asmName = null) {
-            if (cap == null)
-                return true;
-            if (!cap.HasCustomAttributes)
+        public virtual bool MatchingConditionals(ICustomAttributeProvider? cap, AssemblyNameReference? asmName = null) {
+            if (cap is not { HasCustomAttributes: true })
                 return true;
 
             bool status = true;
             foreach (CustomAttribute attrib in cap.CustomAttributes) {
-                if (attrib.AttributeType.FullName == "MonoMod.MonoModOnPlatform") {
-                    CustomAttributeArgument[] plats = (CustomAttributeArgument[]) attrib.ConstructorArguments[0].Value;
-                    for (int i = 0; i < plats.Length; i++) {
-                        if (PlatformHelper.Is((Platform) plats[i].Value)) {
-                            // status &= true;
-                            continue;
+                switch (attrib.AttributeType.FullName)
+                {
+                    case "MonoMod.MonoModOnPlatform": 
+                    {
+                        CustomAttributeArgument[] plats = (CustomAttributeArgument[]) attrib.ConstructorArguments[0].Value;
+                        foreach (CustomAttributeArgument plat in plats) {
+                            if (PlatformHelper.Is((Platform) plat.Value)) {
+                                // status &= true;
+                                continue;
+                            }
                         }
+                        status &= plats.Length == 0;
+                        continue;
                     }
-                    status &= plats.Length == 0;
-                    continue;
-                }
-
-                if (attrib.AttributeType.FullName == "MonoMod.MonoModIfFlag") {
-                    string flag = (string) attrib.ConstructorArguments[0].Value;
-                    bool value;
-                    if (!SharedData.TryGetValue(flag, out object valueObj) || !(valueObj is bool))
-                        if (attrib.ConstructorArguments.Count == 2)
-                            value = (bool) attrib.ConstructorArguments[1].Value;
+                    case "MonoMod.MonoModIfFlag": 
+                    {
+                        string flag = (string) attrib.ConstructorArguments[0].Value;
+                        bool value;
+                        if (!SharedData.TryGetValue(flag, out object valueObj) || valueObj is not bool b)
+                            if (attrib.ConstructorArguments.Count == 2)
+                                value = (bool) attrib.ConstructorArguments[1].Value;
+                            else
+                                value = true;
                         else
-                            value = true;
-                    else
-                        value = (bool) valueObj;
-                    status &= value;
-                    continue;
-                }
-
-                if (attrib.AttributeType.FullName == "MonoMod.MonoModTargetModule") {
-                    string name = (string) attrib.ConstructorArguments[0].Value;
-                    status &= asmName.Name == name || asmName.FullName == name;
-                    continue;
+                            value = b;
+                        status &= value;
+                        continue;
+                    }
+                    case "MonoMod.MonoModTargetModule": 
+                    {
+                        string name = (string) attrib.ConstructorArguments[0].Value;
+                        status &= asmName?.Name == name || asmName?.FullName == name;
+                        continue;
+                    }
                 }
             }
 

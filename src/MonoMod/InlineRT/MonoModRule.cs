@@ -11,7 +11,7 @@ namespace MonoMod.InlineRT {
             MonoModder self = Modder;
 
             bool retrying = false;
-            ModuleDefinition to = null;
+            ModuleDefinition? to;
             RETRY:
             if (toName + ".dll" == self.Module.Name)
                 to = self.Module;

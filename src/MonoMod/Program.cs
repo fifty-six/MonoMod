@@ -53,7 +53,7 @@ namespace MonoMod {
 
             pathIn = args[pathInI];
             pathOut = args.Length != 1 && pathInI != args.Length - 1 ? args[args.Length - 1] : null;
-            pathOut = pathOut ?? Path.Combine(Path.GetDirectoryName(pathIn), "MONOMODDED_" + Path.GetFileName(pathIn));
+            pathOut ??= Path.Combine(Path.GetDirectoryName(pathIn), "MONOMODDED_" + Path.GetFileName(pathIn));
 
             if (File.Exists(pathOut)) File.Delete(pathOut);
 

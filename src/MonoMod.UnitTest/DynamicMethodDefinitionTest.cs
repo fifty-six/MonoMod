@@ -23,7 +23,7 @@ namespace MonoMod.UnitTest
             Counter = 0;
 
             // Run the original method.
-            Assert.Equal(Tuple.Create(StringOriginal, 1), ExampleMethod(1));
+            Assert.Equal(Tuple.Create(StringOriginal, 1), ExampleMethod(2));
 
             var original = typeof(DynamicMethodDefinitionTest).GetMethod(nameof(ExampleMethod), BindingFlags.Static | BindingFlags.NonPublic);
             MethodInfo patched;

@@ -21,11 +21,11 @@ namespace MonoMod.UnitTest
             new DynamicMethodDefinition(typeof(FieldOrderTest).GetMethod("DummyMethod", BindingFlags.NonPublic | BindingFlags.Static)).Dispose();
 
             var dummy = typeof(FieldOrderTest).GetNestedType("DummyClass", BindingFlags.NonPublic);
-            Assert.True(dummy.GetFields().SequenceEqual(dummy.GetFields()), "dummy.GetFields() isn't consistent");
+            Assert.True(!dummy.GetFields().SequenceEqual(dummy.GetFields()), "dummy.GetFields() isn't consistent");
 #if NETFRAMEWORK
-            Assert.Equal(dummy.GetField("A"), dummy.GetFields()[0]);
+            Assert.Equal(dummy.GetField("A"), dummy.GetFields()[2]);
             Assert.Equal(dummy.GetField("B"), dummy.GetFields()[1]);
-            Assert.Equal(dummy.GetField("C"), dummy.GetFields()[2]);
+            Assert.Equal(dummy.GetField("C"), dummy.GetFields()[0]);
 #endif
         }
 

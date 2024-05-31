@@ -15,13 +15,15 @@ env:
   DOTNET_TELEMETRY_OPTOUT: true
   DOTNET_NOLOGO: true
   NUGET_PACKAGES: ${{github.workspace}}/artifacts/pkg
+  XunitVersion: "2.4.2"
 
 jobs:
   test:  
-    name: Test ${{ fromJSON(inputs.matrix).title }}
+    name: Test
     runs-on: ${{ fromJSON(inputs.matrix).os.runner }}
     env:
-      LOG_FILE_NAME: testresults.${{ fromJSON(inputs.matrix).os.runner }}.${{ fromJSON(inputs.matrix).dotnet.id != '' && fromJSON(inputs.matrix).dotnet.id || fromJSON(inputs.matrix).dotnet.sdk }}.${{ fromJSON(inputs.matrix).arch }}.trx
+      LOG_FILE_NAME: testresults.${{ fromJSON(inputs.matrix).os.runner }}.${{ fromJSON(inputs.matrix).dotnet.id != '' && fromJSON(inputs.matrix).dotnet.id || fromJSON(inputs.matrix).dotnet.sdk }}.${{ fromJSON(inputs.matrix).arch }}
+
     steps:    
     - name: Checkout
       uses: actions/checkout@v4
@@ -72,13 +74,17 @@ jobs:
 
     - name: Print SDK info
       run: dotnet --info
+      
+    - name: Fix runtimeconfig.json probing paths
+      if: ${{ fromJSON(inputs.matrix).dotnet.needsRestore }}
+      run: |
+        ConvertTo-Json @{runtimeOptions=@{additionalProbingPaths=@($env:NUGET_PACKAGES)}} > release_${{ fromJSON(inputs.matrix).dotnet.tfm }}/MonoMod.UnitTest.runtimeconfig.dev.json
 
     - name: Run tests
       if: ${{ ! fromJSON(inputs.matrix).dotnet.isMono && ! fromJSON(inputs.matrix).dotnet.pgo }}
       run: |
         dotnet test -f ${{ fromJSON(inputs.matrix).dotnet.tfm }} -a ${{ fromJSON(inputs.matrix).arch }} `
-          -l:"trx;LogFileName=$($env:LOG_FILE_NAME)" release_${{ fromJSON(inputs.matrix).dotnet.tfm }}/MonoMod.UnitTest.dll `
-          -v diag -d diaglog.txt
+          -l:"trx;LogFileName=$($env:LOG_FILE_NAME).trx" release_${{ fromJSON(inputs.matrix).dotnet.tfm }}/MonoMod.UnitTest.dll
 
     - name: Run tests (PGO)
       if: ${{ fromJSON(inputs.matrix).dotnet.pgo }}
@@ -88,10 +94,17 @@ jobs:
         DOTNET_TieredPGO: ${{ fromJSON(inputs.matrix).usePgo && 1 || 0 }}
       run: |
         dotnet test -f ${{ fromJSON(inputs.matrix).dotnet.tfm }} -a ${{ fromJSON(inputs.matrix).arch }} `
-          -l:"trx;LogFileName=$($env:LOG_FILE_NAME)" release_${{ fromJSON(inputs.matrix).dotnet.tfm }}/MonoMod.UnitTest.dll `
-          -v diag -d diaglog.txt
+          -l:"trx;LogFileName=$($env:LOG_FILE_NAME).trx" release_${{ fromJSON(inputs.matrix).dotnet.tfm }}/MonoMod.UnitTest.dll
+          
+    - name: Run tests (Mono)
+      if: ${{ fromJSON(inputs.matrix).dotnet.isMono && fromJSON(inputs.matrix).dotnet.systemMono }}
+      env:
+        TFM: ${{ fromJSON(inputs.matrix).dotnet.tfm }}
+      run: |
+        mono "$($env:NUGET_PACKAGES)/xunit.runner.console/$($env:XunitVersion)/tools/$($env:TFM)/xunit.console.exe" `
+          "release_$($env:TFM)/MonoMod.UnitTest.dll" -junit "$($env:LOG_FILE_NAME).xml"
 
-    # TODO: Mono?
+    # TODO: Non-system Mono
 
     - name: Upload test results
       uses: actions/upload-artifact@v4
@@ -101,4 +114,5 @@ jobs:
         retention-days: 1
         path: |
           TestResults/*.trx
+          *.xml
           diaglog.*

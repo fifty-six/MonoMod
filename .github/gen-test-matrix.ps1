@@ -11,21 +11,30 @@ $operatingSystems = @(
         runner = "windows-latest";
         ridname = "win";
         arch = @("x86","x64"); # while .NET Framework supports Arm64, GitHub doesn't provide Arm windows runners
+        runnerArch = 1;
         hasFramework = $true;
+        monoArch = @("win32", "win64", "win_arm64");
+        monoDll = "mono-2.0-bdwgc.dll";
     },
     [pscustomobject]@{
         name = "Linux";
         runner = "ubuntu-latest";
         ridname = "linux";
         arch = @("x64");
+        runnerArch = 0;
         hasMono = $true;
+        monoArch = @("linux64");
+        monoDll = "limonobdwgc-2.0.so"; # TODO
     },
     [pscustomobject]@{
         name = "MacOS 13";
         runner = "macos-13";
         ridname = "osx";
         arch = @("x64");
+        runnerArch = 0;
         hasMono = $true;
+        monoArch = @("macos_x64");
+        monoDll = "limonobdwgc-2.0.dylib";
     },
     [pscustomobject]@{
         #enable = $false;
@@ -33,7 +42,10 @@ $operatingSystems = @(
         runner = "macos-14";
         ridname = "osx";
         arch = @("x64"<#, "arm64"#>); # x64 comes from Rosetta, and we disable arm64 mode for now because we don't support it yet
+        runnerArch = 1;
         hasMono = $true;
+        monoArch = @("macos_x64", "macos_arm64");
+        monoDll = "limonobdwgc-2.0.dylib";
     }
 );
 
@@ -41,13 +53,11 @@ $dotnetVersions = @(
     [pscustomobject]@{
         name = ".NET Framework 4.x";
         id = 'fx';
-        tfm = "net46";
+        tfm = "net462";
         rids = @("win-x86","win-x64","win-arm64");
         isFramework = $true;
     },
     [pscustomobject]@{
-        #enable = $false; # TODO: fix CI tests for .NET 2.1. For some reason it can't find the testhost (only on non-Linux)
-        # The application to execute does not exist: 'microsoft.testplatform.testhost/17.2.0\lib/netcoreapp2.1/testhost.dll'
         name = ".NET Core 2.1";
         sdk = "2.1";
         tfm = "netcoreapp2.1";
@@ -95,12 +105,44 @@ $dotnetVersions = @(
     }
 );
 
+$monoTfm = "net462";
+
+$monoVersions = @(
+    <#
+    [pscustomobject]@{
+        name = "Unity Mono 6000.0.2";
+        unityVersion = "6000.0.2";
+        monoName = "MonoBleedingEdge";
+    }
+    #>
+);
+
 $jobs = @();
 
 foreach ($os in $operatingSystems)
 {
     if ($os.enable -eq $false) { continue; }
-    $outos = $os | Select-Object -ExcludeProperty arch,ridname,hasFramework,hasMono
+    $outos = $os | Select-Object -ExcludeProperty arch,ridname,hasFramework,hasMono,monoArch,monoDll,runnerArch
+    
+    if ($os.hasMono -and $os.runnerArch -lt $os.arch.Length)
+    {
+        # this OS has a system mono, emit a job for that
+        $jobs += @(
+            [pscustomobject]@{
+                title = "System Mono on $($os.name)";
+                os = $outos;
+                dotnet = [pscustomobject]@{
+                    name = "Mono";
+                    id = "sysmono";
+                    needsRestore = $true; # Monos always need restore
+                    isMono = $true;
+                    systemMono = $true;
+                    tfm = $monoTfm;
+                };
+                arch = $os.arch[$os.runnerArch];
+            }
+        );
+    }
 
     foreach ($arch in $os.arch)
     {
@@ -158,6 +200,8 @@ foreach ($os in $operatingSystems)
                 );
             }
         }
+
+        # TODO: non-system mono
     }
 }
 
